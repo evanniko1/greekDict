@@ -1,0 +1,25 @@
+# Data dumps — large, downloaded locally, never committed
+data/raw/
+data/processed/
+data/db/
+*.jsonl
+*.jsonl.gz
+*.sqlite
+*.sqlite3
+*.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Env
+.env
+.env.local

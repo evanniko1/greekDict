@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C C:/dev/greekDict status)",
+      "Bash(git -C C:/dev/greekDict rev-parse --show-toplevel)",
+      "Read(//c/dev/**)",
+      "Bash(echo \"=== find nrps repo ===\"; ls C:/dev/wcEcoli 2>&1 | head; echo \"---search home/dev for nrps---\"; find C:/Users/vmnik -maxdepth 4 -type d -iname \"*nrps*\" 2>/dev/null | head; find C:/dev -maxdepth 3 -type d -iname \"*chemspace*\" -o -maxdepth 3 -type d -iname \"*nrps*\" 2>/dev/null | head)",
+      "Bash(git -C \"C:/Users/vmnik/OneDrive/Desktop/nrps-chemspace-explorer\" rev-parse --show-toplevel)",
+      "Bash(git -C \"C:/Users/vmnik/OneDrive/Desktop/nrps-chemspace-explorer\" branch --show-current)",
+      "Bash(git -C \"C:/Users/vmnik/OneDrive/Desktop/nrps-chemspace-explorer\" diff --shortstat)",
+      "Bash(git -C \"C:/Users/vmnik/OneDrive/Desktop/nrps-chemspace-explorer\" status --short)",
+      "Bash(git init *)",
+      "Bash(git config *)",
+      "Bash(python tests/test_normalization.py)",
+      "Bash(python tests/test_pipeline_e2e.py)",
+      "Bash(python -m pip install -q fastapi)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(python -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -c ' *)",
+      "Bash(PYTHONUTF8=1 python -m pytest tests/ -q)",
+      "Bash(git add *)",
+      "Bash(git -c user.name=Evangelos -c user.email=evangelos@local commit -q -m ' *)"
+    ]
+  }
+}
