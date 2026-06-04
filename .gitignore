@@ -23,3 +23,7 @@ dist/
 # Env
 .env
 .env.local
+
+# Local Claude Code agent settings (per-machine; harness rewrites it)
+.claude/settings.local.json
+.claude/launch.json
