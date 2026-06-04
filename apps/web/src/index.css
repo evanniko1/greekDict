@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* Tailwind v4 has no config file; declare a class-based dark variant so a manual
+   toggle (.dark on <html>) drives `dark:` utilities instead of prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  /* Smooth the light/dark flip without animating layout. */
+  body {
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+}

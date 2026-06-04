@@ -17,7 +17,7 @@ paradigm engine, and the graph land in later milestones.
 
 ```bash
 python -m pip install -r requirements.txt
-pytest tests/ -q                 # 15 tests: normalization + end-to-end resolution
+pytest tests/ -q                 # 19 tests: normalization + e2e resolution + attribution
 ```
 
 The end-to-end test ingests `tests/fixtures/mini_el.jsonl`, builds the index,
@@ -29,15 +29,22 @@ The Kaikki Greek dumps are large (~100 MB each). **Do not pull them through an
 AI session** — download and ingest them yourself in a terminal:
 
 ```bash
-pwsh pipelines/download_data.ps1                       # fetch el + en extracts
+powershell pipelines/download_data.ps1                 # fetch el + en extracts
 python pipelines/ingest/ingest_kaikki.py --input data/raw/el-extract.jsonl --source el-wiktionary --limit 5000
 python pipelines/ingest/ingest_kaikki.py --input data/raw/en-extract.jsonl --source en-wiktionary --limit 5000
 python pipelines/ingest/build_search_index.py
-uvicorn services.api.app.main:app --reload
+python -m uvicorn services.api.app.main:app --reload --port 8011
 ```
 
 Drop `--limit` for a full run once a sample looks right. `el` first, then `en`
 (en merges onto existing lemmas by normalized-lemma + POS).
+
+**Serve on `--port 8011`, not the default 8000** — in this workspace port 8000 is
+held by another app, so 8000 silently hits the wrong server. Confirm
+`/api/health` reports `db: ...\data\db\lexorama.sqlite`. (`uvicorn` is invoked as
+`python -m uvicorn` since it may not be on PATH.) Form-of stub entries like the
+standalone `ανθρώπων` Wiktionary page are skipped at ingest, so the true lemma
+resolution (`ανθρώπων → άνθρωπος`) ranks first instead of a competing stub.
 
 Try it: `GET /api/search?q=ανθρώπων`, `GET /api/word/λόγος`, `GET /api/health`.
 

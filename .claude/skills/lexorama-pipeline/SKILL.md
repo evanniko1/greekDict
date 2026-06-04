@@ -41,7 +41,7 @@ the download (`pipelines/download_data.ps1`) in their own terminal.
 
 ```bash
 # 1. user downloads (terminal, not via model):
-pwsh pipelines/download_data.ps1
+powershell pipelines/download_data.ps1
 # 2. ingest el first, then en (en merges onto el lemmas by normalized_lemma+pos):
 python pipelines/ingest/ingest_kaikki.py --input data/raw/el-extract.jsonl --source el-wiktionary --limit 5000
 python pipelines/ingest/ingest_kaikki.py --input data/raw/en-extract.jsonl --source en-wiktionary --limit 5000
@@ -56,7 +56,7 @@ Use `--limit` to validate on a sample before dropping it for a full run.
 ## Validate after any pipeline change
 
 ```bash
-pytest tests/ -q   # 15 tests: normalization + e2e form→lemma resolution
+pytest tests/ -q   # 19 tests: normalization + e2e form→lemma resolution + attribution
 ```
 The e2e test (`tests/test_pipeline_e2e.py`) runs against `tests/fixtures/
 mini_el.jsonl` with no download — keep it passing.
