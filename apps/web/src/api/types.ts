@@ -145,9 +145,7 @@ export interface FreqPoint {
 }
 
 export interface DriftSummary {
-  drift_score: number; // preferred point estimate: bootstrap mean when available, else single-model (#50)
-  drift_score_single?: number | null; // the single seed-0 model estimate (provenance)
-  drift_score_boot?: number | null; // bootstrap-mean estimate; null until bootstrap_drift ran (#50)
+  drift_score: number; // point estimate: bootstrap mean when available, else single-model (#50)
   first_year: number;
   last_year: number;
   n_slices: number;
@@ -159,7 +157,6 @@ export interface DriftSummary {
   drift_ci_lo: number | null;
   drift_ci_hi: number | null;
   drift_significant: boolean | null;
-  drift_q?: number | null; // BH-FDR adjusted p across all tested lemmas (#2)
 }
 
 // One point on the per-slice semantic trajectory (#35): cosine distance of the

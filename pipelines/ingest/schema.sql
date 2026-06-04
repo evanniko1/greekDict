@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS diachronic_drift (
     n_slices    INTEGER NOT NULL,         -- slices the lemma had a vector in
     change_point_year INTEGER,            -- year of the largest single-step jump in the per-slice trajectory (#35); NULL when not a clear outlier (#44)
     change_point_score REAL,              -- robust z of the winning step vs the other steps; kept even when suppressed (#44)
-    drift_ci_lo REAL,                     -- bias-corrected (BC) lower bound of endpoint-bootstrap drift (#36/#43); NULL until bootstrap run
+    drift_ci_lo REAL,                     -- 2.5th-pct lower bound of endpoint-bootstrap drift (#36/#43); NULL until bootstrap run
     drift_ci_hi REAL,                     -- 97.5th pct of endpoint-bootstrap drift (#36)
     drift_significant INTEGER,            -- 1 = BH-FDR reject at q<0.05: real drift exceeds same-freq noise (#2/#36)
     drift_q     REAL,                     -- BH-FDR adjusted p-value across all tested lemmas (#2)

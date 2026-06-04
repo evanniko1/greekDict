@@ -73,45 +73,18 @@ def _bh_fdr(p_by_id: dict[int, float], alpha: float = 0.05):
     return q, reject
 
 
-def _bc_interval(replicates: list[float], theta_hat: float, alpha: float = 0.05):
-    """Bias-corrected (BC) bootstrap CI (Efron) — the bias-correction half of BCa.
-
-    Plain percentile intervals assume the bootstrap distribution is centred on the
-    true value; for cosine-drift it isn't — estimation noise makes replicates sit
-    systematically above the single-model point estimate, which is exactly why the
-    displayed drift_score sometimes fell OUTSIDE its own percentile CI. BC fixes that
-    by shifting the percentile cut-points by the median-bias z0 = Φ⁻¹(#{θ*<θ̂}/B):
-
-        α_lo = Φ(2·z0 + z_{α/2}),  α_hi = Φ(2·z0 + z_{1−α/2})
-
-    We deliberately stop at BC, not full BCa: the acceleration term needs a data-level
-    jackknife (leave-one-sentence-out → retrain word2vec), which is infeasible at this
-    corpus size. BC already re-centres the interval on the point estimate, the failure
-    mode we actually had. Returns (lo, hi) or a plain percentile CI as a fallback.
-
-    The dominant accuracy lever here is B (the resample count): with B≥100 these cuts
-    are smooth; at the legacy B=12 they're coarse regardless of method (see #43)."""
-    from scipy.stats import norm as _norm
+def _percentile_ci(replicates: list[float], alpha: float = 0.05):
+    """Plain percentile bootstrap CI (2.5/97.5). Honest about its limit: the cut-points
+    are only as smooth as the resample count K, so the interval is coarse below K≈100
+    (#43) — we do NOT dress it up as BCa, whose acceleration term would need a data-level
+    jackknife we can't afford here. Returns (lo, hi), or None for <2 replicates."""
     import numpy as np
 
-    B = len(replicates)
-    if B < 2:
+    if len(replicates) < 2:
         return None
-    arr = np.sort(np.asarray(replicates, dtype=float))
-    n_less = int(np.sum(arr < theta_hat))
-    prop = n_less / B
-    # Guard the degenerate ends so Φ⁻¹ stays finite; fall back to percentile if the
-    # point estimate sits entirely outside the replicate cloud (z0 undefined).
-    if prop <= 0.0 or prop >= 1.0:
-        return (round(float(np.percentile(arr, 100 * alpha / 2)), 4),
-                round(float(np.percentile(arr, 100 * (1 - alpha / 2))), 4))
-    z0 = float(_norm.ppf(prop))
-    z_lo = float(_norm.ppf(alpha / 2))
-    z_hi = float(_norm.ppf(1 - alpha / 2))
-    a_lo = float(_norm.cdf(2 * z0 + z_lo))
-    a_hi = float(_norm.cdf(2 * z0 + z_hi))
-    return (round(float(np.quantile(arr, a_lo)), 4),
-            round(float(np.quantile(arr, a_hi)), 4))
+    arr = np.asarray(replicates, dtype=float)
+    return (round(float(np.percentile(arr, 100 * alpha / 2)), 4),
+            round(float(np.percentile(arr, 100 * (1 - alpha / 2))), 4))
 
 
 def _resample_to_tempfile(lines: list[str], cap: int, tmp_dir: str) -> str:
@@ -313,14 +286,11 @@ def bootstrap_drift(
             control[lid].append(val)
         print(f"  · control[{n+1}/{len(pairs)}] first[{i}]↔first[{j}]", file=sys.stderr)
 
-    # ── per-lemma CI + a continuous significance test, then BH-FDR (#2). ──
-    # Pass 1: a bias-corrected 95% bootstrap CI from the real samples (#43, display),
-    # and a one-sided parametric p that this lemma's real drift exceeds its OWN
-    # control-noise distribution. z = (mean_real − mean_ctrl)/sd_ctrl, p = Φ̄(z). A
-    # parametric p (vs. the old "real-CI clears control-CI" rule) is continuous, so it
-    # can fall below α even at modest K and — crucially — feeds a proper multiple-
-    # comparison correction. The frequency-matched control null is unchanged. CI
-    # accuracy is dominated by K (--k ≥ 100 recommended; see the compute note).
+    # ── per-lemma CI + significance test, then BH-FDR (#2). ──
+    # Point estimate = bootstrap mean (#50; stable across word2vec's stochasticity).
+    # CI = percentile of the real samples (#43; coarse below K≈100). Significance = a
+    # one-sided p that real drift exceeds this lemma's OWN control-noise distribution
+    # (z = (mean_real − mean_ctrl)/sd_ctrl), fed to BH-FDR. Control null unchanged.
     from scipy.stats import norm as _norm
     MIN_SAMPLES = max(4, k // 2)
     ci_by_id: dict[int, tuple[float, float]] = {}
@@ -330,18 +300,9 @@ def bootstrap_drift(
         rs = real[lid]
         if len(rs) < MIN_SAMPLES:
             continue
-        # #50: the displayed point estimate is the MEAN of the bootstrap drift samples,
-        # not the single seed-0 model — word2vec is stochastic, so one draw is noisy and
-        # (as observed) often sat outside its own CI. The bootstrap mean is a stable
-        # multi-sample estimate AND the natural centre of the interval.
         boot_mean = float(np.mean(rs))
         boot_mean_by_id[lid] = round(boot_mean, 4)
-        # Bias-corrected interval (#43) centred on that bootstrap mean, so the headline
-        # number is the centre of its own CI (z0≈0 here → BC ≈ a smooth high-K percentile
-        # CI; BC still corrects any residual median-bias).
-        ci_by_id[lid] = _bc_interval(rs, boot_mean) or (
-            round(float(np.percentile(rs, 2.5)), 4),
-            round(float(np.percentile(rs, 97.5)), 4))
+        ci_by_id[lid] = _percentile_ci(rs)
         cs = control[lid]
         if len(cs) >= MIN_SAMPLES:
             mu_c = float(np.mean(cs))
@@ -389,7 +350,7 @@ def main() -> None:
     ap.add_argument("--db", default="data/db/lexorama.sqlite")
     ap.add_argument("--corpus", required=True, help="parliament | news")
     ap.add_argument("--k", type=int, default=100,
-                    help="bootstrap resamples per anchor slice (≥100 gives smooth BC "
+                    help="bootstrap resamples per anchor slice (≥100 for smooth percentile "
                          "cut-points; this is the dominant compute cost — see header)")
     ap.add_argument("--cap", type=int, default=250_000,
                     help="max sentences per bootstrap resample (caps the huge news slice)")

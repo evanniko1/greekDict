@@ -17,15 +17,14 @@ classifier instead of a lexicon lookup:
      unambiguous tag is clean supervision; multi-tag lemmas are kept as gold at
      write time but excluded from TRAINING so the classifier learns crisp fields.
   3. X = the lemma's L2-normalized embedding vector, y = its field. Train a
-     multinomial logistic-regression classifier (class-balanced — fields range from
-     ~50 economics lemmas to ~3000 medical), then CALIBRATE its probabilities with
-     Platt scaling (sigmoid) on internal CV folds so the stored "confidence" is an
-     honest probability, not a raw softmax. Report held-out accuracy / macro-F1 AND
-     per-field precision (#47).
-  4. Predict a calibrated top field for every CONTENT lemma (noun/adj/verb) with a
-     vector and no gold tag — but ABSTAIN (store nothing) unless the top probability
-     clears CONF_FLOOR and beats the runner-up by ≥ MARGIN_FLOOR, so low-evidence and
-     genuinely-ambiguous words are left unlabelled instead of forced into a field (#47).
+     class-balanced multinomial logistic-regression classifier. Report held-out
+     accuracy / macro-F1 / per-field precision — honestly: accuracy is only ~0.56 on
+     18 fields, so these are rough inferences, not authoritative labels.
+  4. Predict a top field for every CONTENT lemma (noun/adj/verb) with a vector and no
+     gold tag — but ABSTAIN (store nothing) unless the top softmax prob clears
+     CONF_FLOOR and beats the runner-up by ≥ MARGIN_FLOOR, so low-evidence and
+     ambiguous words are left unlabelled instead of forced into a field. We do not
+     calibrate the probabilities — that would polish the confidence of a weak model.
 
 Provenance is preserved end to end ("sources define, AI explains"): gold tags are
 written verbatim (source='wiktionary-tag', score=1.0); classifier guesses are
@@ -63,9 +62,9 @@ FIELD_DOMAINS = [
 CONTENT_POS = ("noun", "adj", "verb")
 SLICE_GLOB = os.path.join("data", "processed", "diachronic", "*", "*.txt")
 
-# Abstention gates (#47). A prediction is stored only when the CALIBRATED top
-# probability clears CONF_FLOOR *and* beats the runner-up by ≥ MARGIN_FLOOR; otherwise
-# the word is left unlabelled rather than forced into a low-evidence or ambiguous guess.
+# Abstention gates (#47). A prediction is stored only when the top softmax probability
+# clears CONF_FLOOR *and* beats the runner-up by ≥ MARGIN_FLOOR; otherwise the word is
+# left unlabelled rather than forced into a low-evidence or ambiguous guess.
 # (STORE_FLOOR kept as the legacy name / reported value = CONF_FLOOR.)
 CONF_FLOOR = 0.50
 MARGIN_FLOOR = 0.10
@@ -124,7 +123,6 @@ def classify_domains(
 ) -> dict:
     import numpy as np
     from gensim.models import Word2Vec
-    from sklearn.calibration import CalibratedClassifierCV
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import accuracy_score, f1_score, precision_score
     from sklearn.model_selection import train_test_split
@@ -207,18 +205,12 @@ def classify_domains(
     per_field_precision = {f: round(float(p), 3) for f, p in zip(eval_classes, prec)}
     print(f"Held-out accuracy={acc:.3f}  macro-F1={macro_f1:.3f}", file=sys.stderr)
 
-    # Production model: refit on ALL gold single-tag data, then CALIBRATE its
-    # probabilities (#47). A bare logistic-regression softmax is not a calibrated
-    # confidence — "0.8" doesn't mean right 80% of the time — yet we gate and display
-    # exactly that number. Platt scaling (sigmoid) on internal CV folds maps the raw
-    # scores onto honest probabilities (sigmoid, not isotonic: robust on the small
-    # fields, ~50 examples). The base estimator is the same balanced LR as eval.
-    base = LogisticRegression(max_iter=2000, C=4.0, class_weight="balanced", n_jobs=-1)
-    # cv folds must not exceed the smallest field's example count (StratifiedKFold);
-    # clamp to [2, 5] so a thin field can't crash the calibrator.
-    min_class = int(np.unique(y, return_counts=True)[1].min())
-    cv_folds = max(2, min(5, min_class))
-    clf = CalibratedClassifierCV(estimator=base, method="sigmoid", cv=cv_folds)
+    # Production model: refit on ALL gold single-tag data. Held-out accuracy is only
+    # ~0.56 (18 fields), so softmax "confidence" is a rough signal, not a calibrated
+    # probability — we treat it accordingly (abstention gate below; the UI labels these
+    # as inferred). We deliberately do NOT calibrate: polishing the confidence of a
+    # weak classifier would overstate it.
+    clf = LogisticRegression(max_iter=2000, C=4.0, class_weight="balanced", n_jobs=-1)
     clf.fit(X, y)
     classes = list(clf.classes_)
 
@@ -254,7 +246,7 @@ def classify_domains(
         pn[pn == 0] = 1.0
         P = P / pn
         probs = clf.predict_proba(P)
-        # Abstain option (#47): only assign a field when the calibrated top probability
+        # Abstain option (#47): only assign a field when the top softmax probability
         # clears CONF_FLOOR *and* it decisively beats the runner-up (top1−top2 ≥
         # MARGIN_FLOOR). A confident-but-ambiguous word (two plausible fields) and a
         # low-evidence word are both left unlabelled rather than forced into a guess.
@@ -290,7 +282,7 @@ def classify_domains(
         "held_out_accuracy": round(acc, 4),
         "held_out_macro_f1": round(macro_f1, 4),
         "held_out_precision_by_field": per_field_precision,
-        "calibration": "sigmoid (Platt), cv=5",
+        "calibration": "none (raw softmax; not calibrated — weak model)",
         "conf_floor": CONF_FLOOR,
         "margin_floor": MARGIN_FLOOR,
         "gold_rows": gold_rows,

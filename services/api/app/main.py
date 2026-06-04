@@ -775,12 +775,9 @@ def _data_sig(conn) -> str:
 
 
 def _bh_fdr(p_by_id: dict[int, float], alpha: float = 0.05):
-    """Benjamini–Hochberg FDR control over a dict of {id: raw_p}. Returns
-    ({id: q_value}, {id: reject}) where `reject` is the BH decision at the given
-    FDR level and `q_value` is the step-up-adjusted p (monotone, ≤1). We test many
-    lemmas simultaneously, so a bare p<α would let ~α·m of them through as false
-    positives; BH bounds the expected proportion of false discoveries among the
-    flagged set instead. Empty input → empty maps."""
+    """Benjamini–Hochberg FDR over {id: raw_p} → ({id: q_value}, {id: reject}).
+    `q_value` is the monotone step-up-adjusted p; `reject` is the decision at `alpha`.
+    Bounds the false-discovery proportion across the many lemmas tested at once."""
     ids = list(p_by_id)
     m = len(ids)
     if m == 0:
@@ -799,10 +796,8 @@ def _bh_fdr(p_by_id: dict[int, float], alpha: float = 0.05):
 
 
 def _theil_sen_slope(years: list[int], vals: list[float]) -> float:
-    """Theil–Sen slope: the median of all pairwise (Δvalue/Δyear) slopes. The robust
-    companion to the Mann–Kendall test below — a single outlier year can't swing it
-    the way it swings an OLS least-squares slope, so the per-million change/year we
-    display and rank by is resistant to one freak slice."""
+    """Theil–Sen slope: median of all pairwise (Δvalue/Δyear) slopes — robust to a
+    single outlier year, unlike OLS. Used as the displayed per-million change/year."""
     slopes: list[float] = []
     n = len(years)
     for i in range(n - 1):
@@ -818,53 +813,25 @@ def _theil_sen_slope(years: list[int], vals: list[float]) -> float:
     return slopes[m // 2] if m % 2 else 0.5 * (slopes[m // 2 - 1] + slopes[m // 2])
 
 
-def _mann_kendall_p(years: list[int], vals: list[float]) -> tuple[float, int]:
-    """Two-sided p-value for a monotone trend via the Mann–Kendall test with the
-    Hamed–Rao (1998) autocorrelation correction to Var(S). Returns (p, S).
-
-    Why not the OLS slope t-test we used before: that test assumes the yearly points
-    are i.i.d., but frequency series are serially correlated (a word that's common in
-    2018 is common in 2019), which deflates the effective sample size and makes the
-    i.i.d. p anti-conservative — it flags too many trends as significant. Mann–Kendall
-    is non-parametric (no normality/linearity assumption); the Hamed–Rao modification
-    inflates Var(S) by the rank-autocorrelation of the detrended series (using only
-    lags significant at 95%), restoring an honest p on short, correlated series."""
+def _mann_kendall_p(vals: list[float]) -> tuple[float, int]:
+    """Two-sided Mann–Kendall trend p-value (tie-corrected normal approximation),
+    on values already ordered by year. Non-parametric, so no linearity/normality
+    assumption. It does assume independent years; our series are short (11–31 points)
+    and serially correlated, so p is approximate — we lean on the R² shape gate and
+    BH-FDR rather than on this p alone. Returns (p, S)."""
     import numpy as np
-    from scipy.stats import norm as _norm, rankdata
+    from scipy.stats import norm as _norm
 
     n = len(vals)
     if n < 4:
         return 1.0, 0
     x = np.asarray(vals, dtype=float)
-    yrs = np.asarray(years, dtype=float)
-
-    # Mann–Kendall S = Σ_{i<j} sign(x_j − x_i)
     s = 0
     for k in range(n - 1):
         s += int(np.sign(x[k + 1:] - x[k]).sum())
-
-    # Var(S) under independence, with the standard tie correction.
     _, counts = np.unique(x, return_counts=True)
     var_s = (n * (n - 1) * (2 * n + 5)
              - float(np.sum(counts * (counts - 1) * (2 * counts + 5)))) / 18.0
-
-    # Hamed–Rao: detrend by the Sen slope, rank, and inflate Var(S) by the
-    # significant rank-autocorrelations. n/n* = 1 + 2/(n(n-1)(n-2)) Σ (n-i)(n-i-1)(n-i-2) ρ_i.
-    slope = _theil_sen_slope(years, vals)
-    ranks = rankdata(x - slope * (yrs - yrs[0]))
-    rbar = ranks.mean()
-    denom = float(np.sum((ranks - rbar) ** 2))
-    if denom > 0 and n > 3:
-        bound = 1.96 / math.sqrt(n)
-        acc = 0.0
-        for i in range(1, n - 1):
-            rho = float(np.sum((ranks[:n - i] - rbar) * (ranks[i:] - rbar))) / denom
-            if abs(rho) > bound:  # Hamed–Rao keeps only significant lags
-                acc += (n - i) * (n - i - 1) * (n - i - 2) * rho
-        nf = 1.0 + (2.0 / (n * (n - 1) * (n - 2))) * acc
-        if nf > 0:
-            var_s *= nf
-
     if var_s <= 0:
         return 1.0, s
     if s > 0:
@@ -877,12 +844,9 @@ def _mann_kendall_p(years: list[int], vals: list[float]) -> tuple[float, int]:
 
 
 def _log_likelihood_g2(a: int, b: int, c: int, d: int) -> float:
-    """Dunning (1993) log-likelihood G² for a word with frequency `a` in corpus 1
-    (size `c`) and `b` in corpus 2 (size `d`). Replaces the old unmodelled log-ratio's
-    implicit 'significance': G² is the likelihood-ratio statistic against the null that
-    the word is equally frequent in both registers, ~χ²₁, so G²>3.84/6.63/10.83 maps to
-    p<0.05/0.01/0.001. Direction (which corpus) comes from the sign of the log ratio
-    below; G² is the magnitude of the evidence. Always ≥0; 0 when a/c == b/d."""
+    """Dunning (1993) log-likelihood G² for freq `a` in corpus 1 (size `c`) vs `b` in
+    corpus 2 (size `d`): the keyness significance statistic, ~χ²₁ (>10.83 ↔ p<0.001).
+    Direction comes from the log ratio; G² is the strength of evidence. ≥0; 0 if a/c=b/d."""
     if a + b == 0:
         return 0.0
     e1 = c * (a + b) / (c + d)
@@ -896,12 +860,9 @@ def _log_likelihood_g2(a: int, b: int, c: int, d: int) -> float:
 
 
 def _hardie_log_ratio(a: int, b: int, c: int, d: int):
-    """Hardie (2014) Log Ratio (effect size) + 95% CI for the same 2×2 table. log₂ of
-    the relative frequency ratio (a/c)/(b/d): +1 = twice as common in corpus 1, etc.
-    The CI uses the delta-method variance of the log relative risk,
-    Var(ln RR) = 1/a − 1/c + 1/b − 1/d, rescaled to log₂. Replaces the arbitrary +0.1
-    smoother with a proper interval; callers here only pass a,b>0 (INNER JOIN), so no
-    zero-count correction is needed. Returns (log_ratio, ci_lo, ci_hi)."""
+    """Hardie (2014) Log Ratio (effect size) + 95% CI: log₂ of (a/c)/(b/d), +1 = twice
+    as common in corpus 1. CI from the delta-method variance of the log relative risk
+    (1/a−1/c+1/b−1/d), rescaled to log₂. Callers pass a,b>0. Returns (lr, ci_lo, ci_hi)."""
     if a <= 0 or b <= 0 or c <= 0 or d <= 0:
         return 0.0, 0.0, 0.0
     lr = math.log2((a / c) / (b / d))
@@ -985,18 +946,17 @@ def word_diachronic(lemma: str):
             (lid, corpus),
         ).fetchone()
         drift = (
-            # #50: prefer the bootstrap-mean point estimate when present (centre of the
-            # CI); fall back to the single-model drift_score until bootstrap has run.
+            # One coherent point estimate: the bootstrap mean when available (centre of
+            # the CI, #50), else the single-model score until bootstrap has run. The
+            # internal extras (single/boot/q) are not surfaced — the UI shows score, CI,
+            # significance, and the change point.
             {"drift_score": (drow["drift_score_boot"] if drow["drift_score_boot"] is not None
                              else drow["drift_score"]),
-             "drift_score_single": drow["drift_score"],
-             "drift_score_boot": drow["drift_score_boot"],
              "first_year": drow["first_year"],
              "last_year": drow["last_year"], "n_slices": drow["n_slices"],
              "change_point_year": drow["change_point_year"],
              "change_point_score": drow["change_point_score"],
              "drift_ci_lo": drow["drift_ci_lo"], "drift_ci_hi": drow["drift_ci_hi"],
-             "drift_q": drow["drift_q"],
              "drift_significant": (
                  None if drow["drift_significant"] is None
                  else bool(drow["drift_significant"]))}
@@ -1348,10 +1308,9 @@ def explore_trends(corpus: str = "parliament", limit: int = 20,
     Fully deterministic → served from `explore_cache` when warm (≈35 s recompute
     only on the first call after a re-ingest changes the data signature)."""
     conn = db()
-    # v4 (#45): `slope` is now the Theil–Sen slope and significance is the
-    # autocorrelation-robust Mann–Kendall (Hamed–Rao) p → BH-FDR; bump to discard
-    # v3 rows that hold the old OLS slope/p.
-    cache_key = f"trends:v4:{corpus}:{limit}:{min_avg_pm}:{min_r2}"
+    # v5 (#45): `slope` is the Theil–Sen slope and significance is the Mann–Kendall
+    # p → BH-FDR (was OLS slope t-test); bump to discard older cached shapes.
+    cache_key = f"trends:v5:{corpus}:{limit}:{min_avg_pm}:{min_r2}"
     cached = _cache_get(conn, cache_key)
     if cached is not None:
         conn.close()
@@ -1383,17 +1342,10 @@ def explore_trends(corpus: str = "parliament", limit: int = 20,
     ).fetchall()
     cands = [r for r in rows if _keep_mover(r["lemma"], r["normalized_lemma"])]
 
-    # Significance via autocorrelation-robust Mann–Kendall; ranking via Theil–Sen (#45).
-    # The old OLS slope t-test assumed the yearly points were i.i.d. — but frequency
-    # series are serially correlated, which deflates the effective n and makes the
-    # i.i.d. p anti-conservative (too many "trends"). We now test each series with the
-    # non-parametric Mann–Kendall test, autocorrelation-corrected per Hamed–Rao (1998),
-    # and rank/display the robust Theil–Sen slope (median pairwise) instead of the OLS
-    # slope. The SQL above still gates candidates on linear shape (R²), n≥min_n and
-    # avg_pm, so MK/Sen run only on the gated set. R² stays as a display field.
-    #
-    # Fetch each gated candidate's full year→per-million series (one chunked query;
-    # SQLite caps a query at 999 bound params).
+    # Significance via Mann–Kendall, ranking via the robust Theil–Sen slope (#45),
+    # replacing the OLS slope t-test (which assumed i.i.d. years). The SQL gates on
+    # linear shape (R²), n≥min_n and avg_pm, so this runs on the gated set only.
+    # Fetch each candidate's year→per-million series (chunked; SQLite caps params at 999).
     series_by_id: dict[int, list[tuple[int, float]]] = {}
     cand_ids = [r["lemma_id"] for r in cands]
     for off in range(0, len(cand_ids), 900):
@@ -1424,7 +1376,7 @@ def explore_trends(corpus: str = "parliament", limit: int = 20,
         pms = [p for _, p in series]
         sen_by_id[lid] = _theil_sen_slope(yrs, pms) if len(yrs) >= 2 else 0.0
         # min_n (≥5) already guarantees length; guard anyway so MK never sees a short series.
-        p_by_id[lid] = _mann_kendall_p(yrs, pms)[0] if len(yrs) >= 5 else 1.0
+        p_by_id[lid] = _mann_kendall_p(pms)[0] if len(yrs) >= 5 else 1.0
     q_by_id, sig_by_id = _bh_fdr(p_by_id, alpha=0.05)
 
     def pack(r):

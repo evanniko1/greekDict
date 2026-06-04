@@ -157,12 +157,9 @@ def _pool_members(center: int, years: list[int], window: int) -> list[int]:
 def _adaptive_members(center: int, years: list[int], line_count: dict[int, int],
                       target: int, max_window: int) -> list[int]:
     """Smallest ±window band around `center` (0…max_window) whose pooled line count
-    reaches `target` (#49). A FIXED ±window over-blurs already-dense years — it smears
-    a sharp shift across the whole window even where there were plenty of sentences to
-    estimate the year on its own. Adaptive pooling expands the window only as far as a
-    thin year actually needs: dense years stay at window 0 (full temporal resolution),
-    sparse years borrow just enough neighbours to hit `target`, capped at max_window.
-    Returns the member-year list (sorted)."""
+    reaches `target` (#49): dense years stay at window 0 (full temporal resolution),
+    thin years borrow just enough neighbours, capped at max_window. A fixed window
+    over-blurs already-dense years. Returns the member-year list (sorted)."""
     if max_window <= 0 or target <= 0:
         return [center]
     for w in range(0, max_window + 1):
@@ -218,20 +215,10 @@ def _cos_dist(a, b) -> float:
 
 def change_point_year(series: list[tuple[int, float]], min_z: float = 2.0):
     """(year, confidence) of the steepest single-step rise in a distance-from-reference
-    trajectory — or (None, score) when that rise is not a clear outlier (#44).
-
-    `series` is [(year, distance)] sorted by year; the first element is the reference
-    slice (distance 0). We deliberately skip the reference→first step: distance jumps
-    from 0 (self) to ~0.3+ purely from independent-model variance, so that step would
-    always win. Scanning consecutive steps from the first comparison slice onward
-    (series[1:]) isolates real change.
-
-    The old version returned the argmax step unconditionally — presenting a year as
-    fact even when several steps were near-equal noise. We now SCORE the winning step
-    against the robust spread (median/MAD) of the OTHER steps and report a year only
-    when that z-score ≥ min_z; otherwise the change point is suppressed (None) because
-    it's indistinguishable from the surrounding wobble. The score is returned in both
-    cases so callers can persist/flag it. Needs ≥2 comparison steps (≥4 points)."""
+    trajectory, or (None, score) when it's not a clear outlier (#44). The winning step
+    is scored as a robust z against the median/MAD spread of the OTHER steps; a year is
+    reported only when z ≥ min_z, else suppressed as indistinguishable from noise. The
+    reference→first step is skipped (it's all model variance). Needs ≥4 points."""
     import numpy as np
 
     steps = [(y1, d1 - d0) for (_, d0), (y1, d1) in zip(series[1:], series[2:])]
@@ -258,19 +245,11 @@ def change_point_year(series: list[tuple[int, float]], min_z: float = 2.0):
 
 def _align(base_wv, other_wv, anchor_top: int = 5000,
            prune_iters: int = 2, prune_frac: float = 0.25):
-    """Rotate other_wv into base_wv's frame via orthogonal Procrustes (#48).
-
-    The rotation is fit ONLY on stable anchor words, not the whole shared vocabulary.
-    If every shared word votes on the rotation, the very words that drifted pull the
-    frame toward themselves and inflate (or mask) everyone else's measured drift —
-    the alignment is contaminated by the signal we're trying to measure. So we:
-      1. restrict candidate anchors to the high-frequency core present in BOTH slices
-         (gensim orders index_to_key by descending count, so rank < anchor_top picks
-         the frequent words, whose vectors are well-estimated and individually stable);
-      2. iteratively drop the highest-residual anchors — the ones that actually moved —
-         and refit, so the final frame is defined by words that genuinely held still.
-    Returns (aligned_matrix, key_index) covering ALL of other_wv's keys (the fitted
-    rotation is applied to every vector, not just the anchors)."""
+    """Rotate other_wv into base_wv's frame via orthogonal Procrustes, fit only on
+    stable anchors (#48): the high-frequency core shared by both slices, then
+    iteratively dropping the highest-residual (drifted) anchors and refitting — so the
+    words that moved don't pull the frame. Returns (aligned_matrix, key_index) for ALL
+    of other_wv's keys (the rotation is applied to every vector, not just the anchors)."""
     import numpy as np
     from scipy.linalg import orthogonal_procrustes
 
