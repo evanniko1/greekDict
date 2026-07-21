@@ -24,9 +24,10 @@ engine, multi-hop etymology, KWIC concordances, WordNet/OMW edges, bilingual el�
 and the **Layer B/C** corpus pipelines (frequency time-series + diachronic semantic
 drift, trends, keyness, and a supervised domain classifier). **88 passing tests.**
 
-What's *not* done yet lives in [`docs/backlog.md`](docs/backlog.md) — currently the
-methodology-hardening waves (#43–#51) and the infrastructure items (Postgres, CI).
-The running session log / decision record is [`HANDOFF.md`](HANDOFF.md).
+What's *not* done yet lives in [`BACKLOG.md`](BACKLOG.md) — the single source of truth
+for every bug, critical issue, feature and open question, including the 63 findings of
+the [methodology audit](docs/AUDIT.md). The running session log / decision record is
+[`HANDOFF.md`](HANDOFF.md).
 
 ## Quickstart (no download needed)
 
@@ -106,7 +107,8 @@ services/api/app/   main.py            (FastAPI — see API surface below)
 apps/web/           Vite + React + TS + Tailwind v4 + react-router + Cytoscape
 tests/              88 tests (normalization, e2e, pooling, change-point, drift CIs,
                     trends, keyness, anchored alignment, domains, …)
-docs/               data_sources.md · licensing.md · backlog.md
+docs/               data_sources.md · licensing.md · AUDIT.md
+BACKLOG.md          single source of truth for open work (bugs, features, decisions)
 scripts/            start-lexorama.{bat,ps1}
 ```
 
@@ -147,8 +149,9 @@ Diachronic drift uses per-slice word2vec aligned with **orthogonal Procrustes**
 FDR** for multiple comparisons, **Theil–Sen + Mann–Kendall (Hamed–Rao)** for usage
 trends, **Dunning G² + Hardie Log Ratio** for keyness, and a distant-supervision
 logistic-regression **domain classifier** (calibrated, with an abstain option). The
-in-app `/methodology` page documents each in Greek; see `docs/backlog.md` for the
-limits we haven't closed yet.
+in-app `/methodology` page documents each in Greek; see [`BACKLOG.md`](BACKLOG.md) for
+the limits we haven't closed yet — several are serious and currently overstated on that
+page (see [`docs/AUDIT.md`](docs/AUDIT.md) §6).
 
 ## Licensing
 

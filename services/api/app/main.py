@@ -26,6 +26,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "pipelines", "ingest"))
 from normalize_greek import normalize, greeklish_to_greek, greeklish_candidates  # noqa: E402
+import manifest as _manifest  # noqa: E402  (build provenance / divergence checks)
 
 DB_PATH = os.environ.get("LEXORAMA_DB", os.path.join(ROOT, "data", "db", "lexorama.sqlite"))
 
@@ -40,6 +41,7 @@ def db() -> sqlite3.Connection:
     # Forward-compat: a DB built before the etymology feature lacks these tables.
     # Creating them empty (idempotent) keeps /api/word working without a re-ingest;
     # they fill in on the next ingest pass. CREATE IF NOT EXISTS is a no-op once present.
+    conn.executescript(_manifest.DDL)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS etymology ("
         "lemma_id INTEGER PRIMARY KEY REFERENCES lemmas(id), text TEXT, source TEXT NOT NULL)"
@@ -1574,6 +1576,76 @@ def explore_compare(limit: int = 160, min_count: int = 80, max_dp: float = 0.80)
     return result
 
 
+@app.get("/api/build-status")
+def build_status():
+    """Which documented methods the CURRENT data actually reflects.
+
+    The methodology page describes what the pipeline does. That description is only
+    true of the served numbers if the DB was produced by this code — the audit found
+    it was not (F35: three methods stated as present fact that the shipped DB was not
+    produced with). Rather than hard-code a disclaimer that would itself go stale after
+    a re-ingest, the page reads this endpoint and gates its own claims on the data.
+    """
+    if not os.path.exists(DB_PATH):
+        return {"available": False, "diverged": False, "unsupported_claims": []}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        checks = _manifest.check_divergence(conn)
+        conn.close()
+    except Exception as exc:
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}",
+                "diverged": False, "unsupported_claims": []}
+
+    # Which methodology-page claim each failing check invalidates. Keyed by the
+    # section id used in MethodologyPage so the UI can attach the warning in place.
+    CLAIM_BY_CHECK = {
+        "drift_columns": "drift",
+        "classifier_floor": "domains",
+        "lemma_identity": "normalization",
+        "zipf_scale": "frequency",
+        "schema_version": None,
+        "manifest_coverage": None,
+    }
+    failed = [c for c in checks if not c["ok"]]
+    return {
+        "available": True,
+        "diverged": bool(failed),
+        "checks_total": len(checks),
+        "checks_failed": len(failed),
+        "unsupported_claims": [
+            {"section": CLAIM_BY_CHECK.get(c["check"]), "check": c["check"],
+             "detail": c["detail"]}
+            for c in failed
+        ],
+    }
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True, "db": DB_PATH, "db_exists": os.path.exists(DB_PATH)}
+    """Liveness plus build provenance.
+
+    `build.checks_failed` > 0 means the database was not produced by the code in this
+    repo, so the numbers it serves do not correspond to the documented methodology
+    (audit F18/F60/F63). Surfaced here rather than buried in a script so it cannot be
+    ignored silently — see pipelines/ingest/manifest.py.
+    """
+    out = {"ok": True, "db": DB_PATH, "db_exists": os.path.exists(DB_PATH)}
+    if not out["db_exists"]:
+        return out
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        checks = _manifest.check_divergence(conn)
+        builds = _manifest.latest_builds(conn)
+        conn.close()
+        failed = [c for c in checks if not c["ok"]]
+        out["build"] = {
+            "schema_version_expected": _manifest.SCHEMA_VERSION,
+            "components_recorded": [b["component"] for b in builds],
+            "checks_failed": len(failed),
+            "checks_total": len(checks),
+            "diverged": bool(failed),
+            "failures": [{"check": c["check"], "detail": c["detail"]} for c in failed],
+        }
+    except Exception as exc:  # health must never 500
+        out["build"] = {"error": f"{type(exc).__name__}: {exc}"}
+    return out

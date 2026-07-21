@@ -1,4 +1,8 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+
+import { buildStatus } from "../api/client";
+import type { BuildStatusResponse } from "../api/types";
 
 // Μεθοδολογία — explains, in plain Greek, the two corpora and every change measure
 // shown on the exploration page, plus the honest limitations of each. Section ids
@@ -268,6 +272,76 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   return <h2 className="mt-8 mb-3 text-lg font-semibold tracking-tight">{children}</h2>;
 }
 
+/** Greek explanation of what each failing provenance check means for this page's
+ *  claims. Keyed by the check name from /api/build-status. */
+const CHECK_EL: Record<string, string> = {
+  drift_columns:
+    "Τα δεδομένα μετατόπισης που σερβίρονται τώρα δεν περιέχουν ούτε το στατιστικό " +
+    "φίλτρο του σημείου καμπής ούτε το κέντρο του bootstrap. Τα σημεία καμπής " +
+    "παρακάτω εμφανίζονται χωρίς τον έλεγχο z ≥ 2 που περιγράφει αυτή η σελίδα.",
+  classifier_floor:
+    "Οι αποθηκευμένες προβλέψεις θεματικού πεδίου γράφτηκαν με χαμηλότερο κατώφλι " +
+    "από το τρέχον, και δεν αποθηκεύεται περιθώριο από τη δεύτερη επιλογή.",
+  lemma_identity:
+    "Η βάση κλειδώνει ακόμη τα λήμματα στον τόνο-ανεξάρτητο τύπο, οπότε ομόγραφα που " +
+    "διαφέρουν μόνο στον τόνο (ποτέ/πότε, νομός/νόμος) έχουν χαθεί.",
+  zipf_scale:
+    "Οι μετρήσεις συχνότητας είναι διογκωμένες: ένας τύπος που ανήκει σε πολλά " +
+    "λήμματα προσμετράται σε καθένα, οπότε η κλίμακα Zipf ξεπερνά το φυσικό της όριο.",
+  schema_version:
+    "Η βάση δεν φέρει σφραγίδα έκδοσης, οπότε η προέλευσή της δεν είναι επαληθεύσιμη.",
+  manifest_coverage:
+    "Δεν υπάρχει καταγραφή για το ποιος κώδικας παρήγαγε αυτά τα δεδομένα.",
+};
+
+/** The page describes what the pipeline does; this banner says whether the data
+ *  currently being served was actually produced that way. Without it the page states
+ *  methods as present fact that the shipped DB was not produced with (audit F35). */
+function DataStatusBanner() {
+  const [status, setStatus] = useState<BuildStatusResponse | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    buildStatus()
+      .then((s) => alive && setStatus(s))
+      .catch(() => alive && setStatus(null));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!status || !status.available || !status.diverged) return null;
+
+  return (
+    <div
+      role="status"
+      className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200"
+    >
+      <p className="font-semibold">
+        Προσοχή: τα δεδομένα που σερβίρονται δεν παρήχθησαν με όλη τη μεθοδολογία που
+        περιγράφεται εδώ.
+      </p>
+      <p className="mt-1">
+        Η σελίδα περιγράφει τι κάνει ο κώδικας. Οι παρακάτω έλεγχοι προέλευσης
+        απέτυχαν ({status.checks_failed}/{status.checks_total}), άρα οι αντίστοιχες
+        περιγραφές <em>δεν</em> ισχύουν για τους αριθμούς που βλέπετε αυτή τη στιγμή:
+      </p>
+      <ul className="mt-2 flex flex-col gap-1.5 pl-1">
+        {status.unsupported_claims.map((c) => (
+          <li key={c.check} className="flex gap-2">
+            <span aria-hidden="true">•</span>
+            <span>{CHECK_EL[c.check] ?? c.detail}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-amber-800 dark:text-amber-300/90">
+        Αυτή η προειδοποίηση εξαφανίζεται αυτόματα μόλις τα δεδομένα ξαναχτιστούν με τον
+        τρέχοντα κώδικα — δεν είναι χειροκίνητο κείμενο.
+      </p>
+    </div>
+  );
+}
+
 export default function MethodologyPage() {
   return (
     <div className="flex max-w-3xl flex-col gap-2">
@@ -280,6 +354,8 @@ export default function MethodologyPage() {
         αλλαγής, και οι ειλικρινείς περιορισμοί του καθενός. Κάθε μέτρο στηρίζεται σε
         δημοσιευμένη βιβλιογραφία.
       </p>
+
+      <DataStatusBanner />
 
       <SectionHeading>Δεδομένα</SectionHeading>
       <div className="flex flex-col gap-3">

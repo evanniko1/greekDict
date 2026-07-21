@@ -26,6 +26,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from normalize_greek import normalize  # noqa: E402
+import manifest  # noqa: E402
 
 HERE = os.path.dirname(__file__)
 SCHEMA = os.path.join(HERE, "schema.sql")
@@ -146,11 +147,37 @@ def record_attribution(conn: sqlite3.Connection, source: str) -> None:
     )
 
 
+def find_lemma_id(conn: sqlite3.Connection, word: str, pos: str) -> int | None:
+    """Resolve a dump entry to an existing lemma row, refusing to guess.
+
+    Lemma identity is (lemma, pos) — the ACCENTED surface (R2 / audit F21). Matching
+    on the accent-folded key alone would attach data to whichever homograph happened
+    to be inserted first (νόμος "law" vs νομός "prefecture"). We therefore try the
+    exact surface first, and fall back to the folded key only when it is unambiguous;
+    an ambiguous fold returns None so the caller counts it unmatched rather than
+    silently corrupting the wrong word.
+    """
+    row = conn.execute(
+        "SELECT id FROM lemmas WHERE lemma = ? AND pos IS ?", (word, pos)
+    ).fetchone()
+    if row:
+        return row[0]
+    rows = conn.execute(
+        "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
+        (normalize(word), pos),
+    ).fetchall()
+    return rows[0][0] if len(rows) == 1 else None
+
+
 def upsert_lemma(conn: sqlite3.Connection, lemma: str, pos: str, gender: str, source: str) -> int:
     norm = normalize(lemma)
+    # Identity is the ACCENTED surface + pos. Accent is phonemic in Greek, so folding
+    # it into the primary key silently destroyed distinct words — ποτέ "never",
+    # νομός "prefecture", δουλεία "slavery", χαλί "carpet" all had 0 rows (audit F21).
+    # normalized_lemma remains the SEARCH key; it is not the identity key.
     cur = conn.execute(
-        "SELECT id, sources FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-        (norm, pos),
+        "SELECT id, sources FROM lemmas WHERE lemma = ? AND pos IS ?",
+        (lemma, pos),
     )
     row = cur.fetchone()
     if row:
@@ -775,15 +802,12 @@ def ingest_etymology_only(input_path: str, source: str, db_path: str, limit: int
             ety_text, etymons = extract_etymology(entry)
             if not ety_text and not etymons:
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
-            added = store_etymology(conn, row[0], ety_text, etymons, source)
+            added = store_etymology(conn, lemma_id, ety_text, etymons, source)
             if ety_text:
                 stats["etymology"] += 1
             stats["etymons"] += added
@@ -824,15 +848,12 @@ def ingest_pronunciation_only(input_path: str, source: str, db_path: str, limit:
             ipas = extract_pronunciations(entry)
             if not ipas:
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
-            added = store_pronunciations(conn, row[0], ipas, source)
+            added = store_pronunciations(conn, lemma_id, ipas, source)
             if added:
                 stats["lemmas"] += 1
             stats["ipas"] += added
@@ -874,15 +895,12 @@ def ingest_descendants_only(input_path: str, source: str, db_path: str, limit: i
             descs = extract_descendants(entry)
             if not descs:
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
-            added = store_descendants(conn, row[0], descs, source)
+            added = store_descendants(conn, lemma_id, descs, source)
             if added:
                 stats["lemmas"] += 1
             stats["descendants"] += added
@@ -921,11 +939,8 @@ def ingest_sense_tags_only(input_path: str, source: str, db_path: str, limit: in
             if not word or entry.get("lang_code") not in (None, "el") or is_form_of_entry(entry):
                 stats["skipped"] += 1
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
@@ -935,7 +950,7 @@ def ingest_sense_tags_only(input_path: str, source: str, db_path: str, limit: in
                     continue
                 cur = conn.execute(
                     "UPDATE senses SET tags = ? WHERE lemma_id = ? AND sense_index = ? AND source = ?",
-                    (json.dumps(sense_tags(sense), ensure_ascii=False), row[0], i, source),
+                    (json.dumps(sense_tags(sense), ensure_ascii=False), lemma_id, i, source),
                 )
                 stats["senses_updated"] += cur.rowcount
             if stats["lines"] % 50000 == 0:
@@ -980,6 +995,19 @@ def main() -> None:
     else:
         print(f"Ingesting {args.input} as {args.source} -> {args.db}", file=sys.stderr)
         stats = ingest(args.input, args.source, args.db, args.limit)
+
+    # Record what produced this data, so a later reader can tell whether the DB
+    # matches the code (audit F18/F60/F63 — see pipelines/ingest/manifest.py).
+    mode = next((m for m in ("etymology_only", "ipa_only", "descendants_only",
+                             "sense_tags_only") if getattr(args, m)), "full")
+    _conn = sqlite3.connect(args.db)
+    manifest.record_build(
+        _conn, "ingest_kaikki", version=f"{args.source}:{mode}",
+        inputs=[args.input],
+        params={"source": args.source, "mode": mode, "limit": args.limit},
+        tables=["lemmas", "senses", "forms", "relations"],
+    )
+    _conn.close()
     print(json.dumps(stats, indent=2))
 
 

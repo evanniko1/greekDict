@@ -11,8 +11,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
+import manifest  # noqa: E402
 
 
 def build(db_path: str) -> dict:
@@ -43,6 +47,9 @@ def main() -> None:
     ap.add_argument("--db", default="data/db/lexorama.sqlite")
     args = ap.parse_args()
     stats = build(args.db)
+    conn = sqlite3.connect(args.db)
+    manifest.record_build(conn, "build_search_index", tables=["search_index"])
+    conn.close()
     print(json.dumps(stats, indent=2), file=sys.stderr)
     print(json.dumps(stats))
 

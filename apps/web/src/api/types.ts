@@ -341,6 +341,24 @@ export interface HealthResponse {
   db_exists: boolean;
 }
 
+/** Which documented methods the currently-served data actually reflects.
+ *  `section` matches a MethodologyPage block id, so a warning can be attached
+ *  next to the exact claim it invalidates. */
+export interface UnsupportedClaim {
+  section: string | null;
+  check: string;
+  detail: string;
+}
+
+export interface BuildStatusResponse {
+  available: boolean;
+  diverged: boolean;
+  checks_total?: number;
+  checks_failed?: number;
+  unsupported_claims: UnsupportedClaim[];
+  error?: string;
+}
+
 export interface SourceAttribution {
   source_name: string;
   source_url: string | null;
