@@ -95,6 +95,16 @@ def test_active_endings_are_detected(form):
     assert infer_voice(form, [], "verb") == "active"
 
 
+@pytest.mark.parametrize("form", [
+    # colloquial imperfect with final -α/-ε; these were landing in the active grid
+    "σκοτωνόμουνα", "απτόσουνα", "αβγοκοβότανε", "χανόμουνα",
+    # B-conjugation (contract) mediopassive
+    "αγαπιέμαι", "αγαπιέσαι", "αγαπιέται", "θυμιόμουν",
+])
+def test_colloquial_and_contract_mediopassive_are_detected(form):
+    assert infer_voice(form, [], "verb") == "passive", form
+
+
 def test_periphrastic_voice_comes_from_the_lexical_verb():
     """The pair that proved the bug: byte-identical feature lists for both voices."""
     assert infer_voice("έχω σκοτώσει", [], "verb") == "active"

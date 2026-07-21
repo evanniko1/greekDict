@@ -59,6 +59,17 @@ then stop the **false claims**.
 
 ### Follow-ups opened by the remediation
 
+- [ ] **N1 — Κλίση panel appears not to render on desktop.** Observed 2026-07-21 while
+  verifying the rebuild: on a fresh load at 1280×900, `/word/σκοτώνω` renders ΕΤΥΜΟΛΟΓΙΑ,
+  ΔΙΑΧΡΟΝΙΚΗ ΠΟΡΕΙΑ, ΟΜΟΡΡΙΖΕΣ, ΟΙΚΟΓΕΝΕΙΑ, ΜΕ ΜΙΑ ΜΑΤΙΑ and ΓΡΑΦΗΜΑ ΣΧΕΣΕΩΝ but **no
+  inflection card and zero `<table>` elements**, while the same URL at 420px wide shows
+  all four grids correctly after selecting the Κλίση tab. The API payload is fine (251
+  forms). Suspect the `useMediaQuery` desktop branch in `WordPage.tsx` — per HANDOFF only
+  one layout tree mounts. Pre-existing (nothing in the audit remediation touched
+  `WordPage.tsx` or `inflection.ts`), but it would mean desktop users never see the
+  inflection tables — which are one half of the flagship feature. Verify against a real
+  browser before assuming the preview tool is at fault.
+
 - [ ] **R2-followup — Re-ingest under schema_version 2 to recover the lost words.** The
   key is fixed but the shipped DB predates it. Requires a full `ingest_kaikki` re-run
   (el then en) + `build_search_index`, with the API stopped. Large operation, maintainer's
