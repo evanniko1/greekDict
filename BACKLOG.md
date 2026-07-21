@@ -59,16 +59,19 @@ then stop the **false claims**.
 
 ### Follow-ups opened by the remediation
 
-- [ ] **N1 — Κλίση panel appears not to render on desktop.** Observed 2026-07-21 while
-  verifying the rebuild: on a fresh load at 1280×900, `/word/σκοτώνω` renders ΕΤΥΜΟΛΟΓΙΑ,
-  ΔΙΑΧΡΟΝΙΚΗ ΠΟΡΕΙΑ, ΟΜΟΡΡΙΖΕΣ, ΟΙΚΟΓΕΝΕΙΑ, ΜΕ ΜΙΑ ΜΑΤΙΑ and ΓΡΑΦΗΜΑ ΣΧΕΣΕΩΝ but **no
-  inflection card and zero `<table>` elements**, while the same URL at 420px wide shows
-  all four grids correctly after selecting the Κλίση tab. The API payload is fine (251
-  forms). Suspect the `useMediaQuery` desktop branch in `WordPage.tsx` — per HANDOFF only
-  one layout tree mounts. Pre-existing (nothing in the audit remediation touched
-  `WordPage.tsx` or `inflection.ts`), but it would mean desktop users never see the
-  inflection tables — which are one half of the flagship feature. Verify against a real
-  browser before assuming the preview tool is at fault.
+- [x] **N1 — RETRACTED, not a defect.** *(raised and withdrawn 2026-07-21)*
+  I reported that the Κλίση panel did not render at desktop width. It does. The desktop
+  branch renders `formsDisclosure` (`WordPage.tsx:714-753`), a progressive disclosure that
+  is **collapsed by default by design** — the code comment says so — and mounts its tables
+  only on click (`{formsOpen && …}`). Confirmed at 1280×900: 0 tables before the click,
+  **4 tables after**, both voice grids, `aria-expanded` → `true`.
+  Two probe errors caused the false positive, both mine: I read "no mounted `<table>`" as
+  "not rendered" on a deliberately collapsed panel, then my follow-up finder matched
+  `includes('Κλίση')` against a label that Tailwind's `uppercase` renders as **ΚΛΙΣΗ**, so
+  `innerText` never matched and I concluded the button was absent too.
+  *Lesson worth keeping: when probing a UI, assert on the accessibility tree or on
+  `aria-expanded`, not on the presence of descendants that progressive disclosure is
+  supposed to withhold — and never case-match text that CSS may have transformed.*
 
 - [ ] **R2-followup — Re-ingest under schema_version 2 to recover the lost words.** The
   key is fixed but the shipped DB predates it. Requires a full `ingest_kaikki` re-run
