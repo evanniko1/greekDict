@@ -35,6 +35,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "pipelines", "ingest"))
 from ingest_kaikki import init_db  # noqa: E402
+import manifest  # noqa: E402
 
 # Glosses that are cross-references / form-of pointers, not translations.
 _SKIP_RE = re.compile(
@@ -123,6 +124,9 @@ def main() -> None:
     ap.add_argument("--db", default="data/db/lexorama.sqlite")
     args = ap.parse_args()
     stats = build(args.db)
+    conn = sqlite3.connect(args.db)
+    manifest.record_build(conn, "build_gloss_index", tables=["gloss_index"])
+    conn.close()
     print(json.dumps(stats, indent=2, ensure_ascii=False))
 
 

@@ -68,8 +68,8 @@ def _class_of(lemma: str, pos: str, gender: str | None) -> str:
     return "noun:?"
 
 
-def main(limit_per_class: int = 100000):
-    conn = sqlite3.connect(DB)
+def main(limit_per_class: int = 100000, db: str | None = None):
+    conn = sqlite3.connect(db or DB)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT id, lemma, pos, gender FROM lemmas WHERE pos IN ('noun','adj','verb')"
@@ -131,4 +131,12 @@ def main(limit_per_class: int = 100000):
 
 
 if __name__ == "__main__":
-    main()
+    # The precision gate must be runnable against any candidate build, not just the
+    # default path — otherwise a rebuild cannot be validated before it is promoted.
+    import argparse
+
+    _ap = argparse.ArgumentParser(description="Report paradigm-engine precision per class.")
+    _ap.add_argument("--db", default=DB)
+    _ap.add_argument("--limit-per-class", type=int, default=100000)
+    _args = _ap.parse_args()
+    main(limit_per_class=_args.limit_per_class, db=_args.db)

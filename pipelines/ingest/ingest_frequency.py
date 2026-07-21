@@ -34,6 +34,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "pipelines", "ingest"))
 from ingest_kaikki import init_db, record_attribution  # noqa: E402
 from normalize_greek import normalize  # noqa: E402
+import manifest  # noqa: E402
 
 
 # No real lemma owns this share of a corpus. Anything above it is a symptom of a
@@ -170,7 +171,13 @@ def main() -> None:
 
     print(f"Frequency pass: {args.freq_file} as {args.source} -> {args.db}", file=sys.stderr)
     import json
-    print(json.dumps(ingest_frequency(args.freq_file, args.db, args.source), indent=2, ensure_ascii=False))
+    import sqlite3 as _sq
+    stats = ingest_frequency(args.freq_file, args.db, args.source)
+    _c = _sq.connect(args.db)
+    manifest.record_build(_c, "ingest_frequency", inputs=[args.freq_file],
+                          params={"source": args.source}, tables=["frequency"])
+    _c.close()
+    print(json.dumps(stats, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

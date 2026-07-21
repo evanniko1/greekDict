@@ -29,6 +29,7 @@ from .greek_accent import (
     set_stress,
     set_stress_from_start,
     hiatus_ambiguous,
+    is_polytonic,
 )
 
 __all__ = ["generate", "supported_classes"]
@@ -329,6 +330,14 @@ def generate(lemma: str, pos: str | None, gender: str | None) -> list[tuple[str,
         return []  # contains Latin letters → not a Greek headword
     if hiatus_ambiguous(lemma):
         return []  # γάιδαρος-class: destressing changes syllabification → unsafe
+    if is_polytonic(lemma):
+        return []  # polytonic headword: Modern Greek paradigms do not apply (F40)
+    if n_syllables(lemma) > 1 and stress_index_from_start(lemma) == -1:
+        # Stress genuinely undetectable on a polysyllabic word. Previously this fell
+        # through to "accent syllable 1", which bolted a second accent onto words that
+        # already had one the old table could not see — ἔναύλος, μούστακᾶτος (F40).
+        # Refuse, exactly as we already refuse the hiatus-ambiguous class.
+        return []
     p = (pos or "").lower()
     try:
         if p == "verb":
@@ -339,18 +348,25 @@ def generate(lemma: str, pos: str | None, gender: str | None) -> list[tuple[str,
             return []
         if p == "noun":
             g = (gender or "").lower()
+            # Gender must be KNOWN. Treating "" as a licence to use the masculine -ος
+            # (or neuter -μα/-ο/-ι) paradigm produced non-words from mis-parsed
+            # headwords: καταστρώματος → καταστρώματε/καταστρώματοι, θελήματος →
+            # θελήματοι (F42). A feminine in -μα would take the -ματ- oblique stem.
+            # Sources define: with no gender we do not know the declension class.
+            if not g:
+                return []
             if lemma.endswith("ος") or lemma.endswith("ός"):
-                return _noun_os(lemma) if g in ("masculine", "") else []
+                return _noun_os(lemma) if g == "masculine" else []
             if lemma.endswith("μα"):
-                return _noun_ma_neuter(lemma) if g in ("neuter", "") else []
+                return _noun_ma_neuter(lemma) if g == "neuter" else []
             if lemma.endswith("ο") or lemma.endswith("ό"):
-                return _noun_o(lemma) if g in ("neuter", "") else []
+                return _noun_o(lemma) if g == "neuter" else []
             if lemma.endswith("α") or lemma.endswith("ά"):
                 return _noun_a_fem(lemma) if g == "feminine" else []
             if lemma.endswith("η") or lemma.endswith("ή"):
                 return _noun_h_fem(lemma) if g == "feminine" else []
             if lemma.endswith("ι") or lemma.endswith("ί"):
-                return _noun_i_neuter(lemma) if g in ("neuter", "") else []
+                return _noun_i_neuter(lemma) if g == "neuter" else []
             return []
     except Exception:
         return []  # never let a malformed lemma crash the backfill
