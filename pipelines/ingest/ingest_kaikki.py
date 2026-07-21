@@ -90,31 +90,31 @@ SOURCE_META: dict[str, dict[str, str]] = {
     },
     "leipzig-coocc": {
         "source_url": "https://wortschatz.uni-leipzig.de/en/download/Modern%20Greek",
-        "license": "CC BY 4.0",
+        "license": "CC BY-NC 4.0",
         "attribution_text": (
             "Δεδομένα συνεμφάνισης λέξεων (συνάψεις) από τα Corpora Collection "
             "του Wortschatz Leipzig (Πανεπιστήμιο της Λειψίας), διαθέσιμα υπό την "
-            "άδεια CC BY 4.0. Οι συνάψεις έχουν αντιστοιχιστεί σε λήμματα και "
+            "άδεια CC BY-NC 4.0. Οι συνάψεις έχουν αντιστοιχιστεί σε λήμματα και "
             "ταξινομηθεί κατά ισχύ συσχέτισης (log-likelihood)."
         ),
     },
     "leipzig-examples": {
         "source_url": "https://wortschatz.uni-leipzig.de/en/download/Modern%20Greek",
-        "license": "CC BY 4.0",
+        "license": "CC BY-NC 4.0",
         "attribution_text": (
             "Παραδείγματα χρήσης (αυθεντικές προτάσεις) από τα Corpora Collection "
             "του Wortschatz Leipzig (Πανεπιστήμιο της Λειψίας) — σώμα ειδησεογραφικού "
-            "λόγου, διαθέσιμα υπό την άδεια CC BY 4.0. Κάθε πρόταση έχει αντιστοιχιστεί "
+            "λόγου, διαθέσιμα υπό την άδεια CC BY-NC 4.0. Κάθε πρόταση έχει αντιστοιχιστεί "
             "σε λήμματα μέσω των τύπων της και επιλεγεί με κριτήρια αναγνωσιμότητας."
         ),
     },
     "leipzig-embeddings": {
         "source_url": "https://wortschatz.uni-leipzig.de/en/download/Modern%20Greek",
-        "license": "CC BY 4.0",
+        "license": "CC BY-NC 4.0",
         "attribution_text": (
             "Σημασιολογικοί γείτονες από μοντέλο διανυσματικών αναπαραστάσεων λέξεων "
             "(word2vec) εκπαιδευμένο στο σώμα κειμένων Wortschatz Leipzig (Πανεπιστήμιο "
-            "της Λειψίας), διαθέσιμο υπό την άδεια CC BY 4.0. Οι γείτονες υπολογίζονται "
+            "της Λειψίας), διαθέσιμο υπό την άδεια CC BY-NC 4.0. Οι γείτονες υπολογίζονται "
             "ως οι λέξεις με τα πλησιέστερα διανύσματα (ομοιότητα συνημιτόνου) και έχουν "
             "αντιστοιχιστεί σε λήμματα."
         ),

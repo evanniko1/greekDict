@@ -12,7 +12,9 @@ analytics layer*. Three things justify the project:
    meaning (semantic drift), and register-distinctiveness change over time, with
    honest statistics and uncertainty attached.
 
-Guiding principle: **sources define, AI explains.** Every sense, form, relation,
+Guiding principle: **sources define.** There is no language model in this product; the
+only computed additions are a statistical domain classifier and a rule-based paradigm
+engine, both marked wherever they surface. Every sense, form, relation,
 and corpus statistic carries a `source`; nothing silently merges Wiktionary,
 WordNet, corpus evidence, and inferred labels.
 

@@ -193,7 +193,17 @@ def _features_label(features_json: str | None) -> str | None:
     return ", ".join(tags) if tags else None
 
 
-def _resolve_lemma_ids(conn: sqlite3.Connection, surface: str) -> list[int]:
+# A word page renders one full entry per resolved lemma — senses, forms, etymology,
+# relations, collocations, the lot. Unbounded, a syncretic surface fanned out to 1,377
+# entries and ~46 MB of JSON in a single GET (audit F36): an availability bug, not just
+# a slow page. Nobody reads the 13th homograph; the cap is a product decision as much as
+# a safety one, and the payload reports the true total so the UI can say so.
+MAX_WORD_ENTRIES = 12
+
+
+def _resolve_lemma_ids(
+    conn: sqlite3.Connection, surface: str, limit: int = MAX_WORD_ENTRIES
+) -> list[int]:
     """Resolve a raw surface to lemma id(s), in display priority order.
 
     A word page may be requested by its canonical lemma OR by any inflected
@@ -216,7 +226,7 @@ def _resolve_lemma_ids(conn: sqlite3.Connection, surface: str) -> list[int]:
         (key, surface.strip()),
     )]
     if direct:
-        return direct
+        return direct[:limit]
 
     # Greeklish widening: try the plausible spellings, most-frequent lemma first
     # (so /word/zoi lands on ζωή, not a rarer ζοι-like form).
@@ -243,11 +253,14 @@ def _resolve_lemma_ids(conn: sqlite3.Connection, surface: str) -> list[int]:
         if row["lemma_id"] not in seen:
             seen.add(row["lemma_id"])
             ids.append(row["lemma_id"])
+            if len(ids) >= limit:
+                break
     return ids
 
 
 @app.get("/api/search")
-def search(q: str = Query(..., min_length=1), limit: int = 10):
+def search(q: str = Query(..., min_length=1, max_length=120),
+           limit: int = Query(10, ge=1, le=50)):
     """Resolve a query to ranked lemma candidates, each with a match explanation."""
     conn = db()
     key = normalize(q)
@@ -398,7 +411,10 @@ def search(q: str = Query(..., min_length=1), limit: int = 10):
 def word(lemma: str):
     """Full word-page payload for a lemma (accent-insensitive lookup)."""
     conn = db()
-    lemma_ids = _resolve_lemma_ids(conn, lemma)
+    # Resolve once uncapped to learn the true homograph count, then cap what we
+    # materialise. Counting is cheap (ids only); building entries is not.
+    all_ids = _resolve_lemma_ids(conn, lemma, limit=10_000)
+    lemma_ids = all_ids[:MAX_WORD_ENTRIES]
     if not lemma_ids:
         conn.close()
         raise HTTPException(404, f"No lemma for '{lemma}'.")
@@ -568,7 +584,14 @@ def word(lemma: str):
             ],
         })
     conn.close()
-    return {"lemma": lemma, "entries": payloads}
+    # entries_total vs len(entries) lets the client say "showing 12 of N" rather than
+    # silently dropping homographs — a truncation the user cannot see is a lie.
+    return {
+        "lemma": lemma,
+        "entries": payloads,
+        "entries_total": len(all_ids),
+        "entries_truncated": len(all_ids) > len(payloads),
+    }
 
 
 @app.get("/api/word/{lemma}/graph")
@@ -676,7 +699,7 @@ def attributions():
 
 
 @app.get("/api/insights/queries")
-def query_insights(limit: int = 50):
+def query_insights(limit: int = Query(50, ge=1, le=500)):
     """Data-flywheel readout from the query log: volume, resolution rate, and the
     top UNRESOLVED queries — the gap list of words users want that we don't serve.
     These rank what to ingest next and seed spell-correction."""
@@ -887,12 +910,34 @@ def _cache_get(conn, key: str):
     return None
 
 
+def _q(x: float, places: int = 3) -> str:
+    """Quantize a float for use in a cache key.
+
+    Every distinct key is a permanent `explore_cache` row that costs ~35 s to build, so
+    a caller passing min_r2=0.2500001, 0.2500002, … could fill the table indefinitely
+    (audit F55). Rounding collapses those onto one key without changing any result a
+    user could perceive.
+    """
+    return f"{round(float(x), places):.{places}f}"
+
+
+# Bound on distinct cached variants. The parameter grids are small once floats are
+# quantized, so exceeding this means something is generating keys rather than a human
+# exploring — evict oldest rather than grow without limit.
+MAX_CACHE_ROWS = 500
+
+
 def _cache_put(conn, key: str, payload: dict) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO explore_cache (cache_key, sig, payload, built_at) "
         "VALUES (?, ?, ?, ?)",
         (key, _data_sig(conn), json.dumps(payload, ensure_ascii=False),
          datetime.now(timezone.utc).isoformat()),
+    )
+    conn.execute(
+        "DELETE FROM explore_cache WHERE cache_key NOT IN "
+        "(SELECT cache_key FROM explore_cache ORDER BY built_at DESC LIMIT ?)",
+        (MAX_CACHE_ROWS,),
     )
     conn.commit()
 
@@ -999,7 +1044,9 @@ def word_diachronic(lemma: str):
 
 
 @app.get("/api/insights/drift")
-def drift_insights(corpus: str = "parliament", limit: int = 30, min_pm: float = 1.0):
+def drift_insights(corpus: str = Query("parliament", max_length=32),
+                   limit: int = Query(30, ge=1, le=200),
+                   min_pm: float = Query(1.0, ge=0.0, le=1e6)):
     """'Biggest movers' — lemmas whose meaning shifted most within one corpus.
 
     The raw drift table keeps every lemma (a word page needs its own score), but
@@ -1099,7 +1146,9 @@ def explore_overview():
 
 
 @app.get("/api/explore/interesting")
-def explore_interesting(corpus: str = "parliament", limit: int = 25, min_pm: float = 1.0):
+def explore_interesting(corpus: str = Query("parliament", max_length=32),
+                        limit: int = Query(25, ge=1, le=200),
+                        min_pm: float = Query(1.0, ge=0.0, le=1e6)):
     """Frequency-robust 'interesting movers', two metrics side by side:
       · neighbor — 1 − Jaccard of a word's top-k neighbors then vs now (Gonen 2020),
         precomputed at k=50 in the pipeline and stored on diachronic_drift; far more
@@ -1238,7 +1287,8 @@ def _lemma_domains(conn):
 
 
 @app.get("/api/explore/by-field")
-def explore_by_field(corpus: str = "parliament", per_field: int = 8):
+def explore_by_field(corpus: str = Query("parliament", max_length=32),
+                     per_field: int = Query(8, ge=1, le=50)):
     """Biggest movers WITHIN each subject field (ιατρική, νομική, πληροφορική …).
     Joins cosine drift with the sense domain tags. Field keys are English; the UI
     maps them to Greek."""
@@ -1295,8 +1345,10 @@ def explore_by_field(corpus: str = "parliament", per_field: int = 8):
 
 
 @app.get("/api/explore/trends")
-def explore_trends(corpus: str = "parliament", limit: int = 20,
-                   min_avg_pm: float = 1.0, min_r2: float = 0.25):
+def explore_trends(corpus: str = Query("parliament", max_length=32),
+                   limit: int = Query(20, ge=1, le=200),
+                   min_avg_pm: float = Query(1.0, ge=0.0, le=1e6),
+                   min_r2: float = Query(0.25, ge=0.0, le=1.0)):
     """Cumulative-usage trend (Layer B): per-million linear slope over the corpus
     span. Risers (slope ↑) and fallers (slope ↓), content words only. Slope is the
     least-squares fit computed directly in SQL.
@@ -1312,7 +1364,9 @@ def explore_trends(corpus: str = "parliament", limit: int = 20,
     conn = db()
     # v5 (#45): `slope` is the Theil–Sen slope and significance is the Mann–Kendall
     # p → BH-FDR (was OLS slope t-test); bump to discard older cached shapes.
-    cache_key = f"trends:v5:{corpus}:{limit}:{min_avg_pm}:{min_r2}"
+    # Quantize float components: each distinct key is a permanent row costing ~35 s to
+    # build, so unrounded user floats are a cheap way to fill the table (audit F55).
+    cache_key = f"trends:v5:{corpus}:{limit}:{_q(min_avg_pm)}:{_q(min_r2)}"
     cached = _cache_get(conn, cache_key)
     if cached is not None:
         conn.close()
@@ -1406,7 +1460,9 @@ def explore_trends(corpus: str = "parliament", limit: int = 20,
 
 
 @app.get("/api/explore/compare")
-def explore_compare(limit: int = 160, min_count: int = 80, max_dp: float = 0.80):
+def explore_compare(limit: int = Query(160, ge=1, le=500),
+                    min_count: int = Query(80, ge=1, le=100000),
+                    max_dp: float = Query(0.80, ge=0.0, le=1.0)):
     """Cross-corpus view — the only place the two axes meet, explicitly as a
     comparison. Two parts:
       · pairs   — words with drift in BOTH corpora → agreement/divergence scatter.
@@ -1427,7 +1483,7 @@ def explore_compare(limit: int = 160, min_count: int = 80, max_dp: float = 0.80)
     Fully deterministic → served from `explore_cache` when warm (≈35 s recompute
     only on the first call after a re-ingest changes the data signature)."""
     conn = db()
-    cache_key = f"compare:v2:{limit}:{min_count}:dp{max_dp}"  # v2: G²/Hardie LR keyness (#46)
+    cache_key = f"compare:v2:{limit}:{min_count}:dp{_q(max_dp)}"  # v2: G²/Hardie LR keyness (#46)
     cached = _cache_get(conn, cache_key)
     if cached is not None:
         conn.close()
