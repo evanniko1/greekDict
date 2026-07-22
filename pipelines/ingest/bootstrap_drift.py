@@ -47,6 +47,8 @@ import tempfile
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "pipelines", "ingest"))
 from ingest_kaikki import init_db  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "pipelines", "analysis"))
+from estimators import bca_interval as _bca  # noqa: E402  (#43 bias-corrected interval)
 from ingest_diachronic import (  # noqa: E402
     _train, _align, _cos_dist, PROCESSED, _pool_members, _adaptive_members,
 )
@@ -288,10 +290,13 @@ def bootstrap_drift(
 
     # ── per-lemma CI + significance test, then BH-FDR (#2). ──
     # Point estimate = bootstrap mean (#50; stable across word2vec's stochasticity).
-    # CI = percentile of the real samples (#43; coarse below K≈100). Significance = a
+    # CI = bias-corrected bootstrap interval (#43; see below). Significance = a
     # one-sided p that real drift exceeds this lemma's OWN control-noise distribution
     # (z = (mean_real − mean_ctrl)/sd_ctrl), fed to BH-FDR. Control null unchanged.
     from scipy.stats import norm as _norm
+    # The original (non-resampled) drift estimate, for the bias-correction z0.
+    orig_drift = {r["lemma_id"]: r["drift_score"] for r in conn.execute(
+        "SELECT lemma_id, drift_score FROM diachronic_drift WHERE corpus = ?", (corpus,))}
     MIN_SAMPLES = max(4, k // 2)
     ci_by_id: dict[int, tuple[float, float]] = {}
     p_by_id: dict[int, float] = {}
@@ -302,7 +307,17 @@ def bootstrap_drift(
             continue
         boot_mean = float(np.mean(rs))
         boot_mean_by_id[lid] = round(boot_mean, 4)
-        ci_by_id[lid] = _percentile_ci(rs)
+        # Bias-corrected bootstrap interval (#43 / F11), replacing the plain percentile.
+        # A jackknife over sentences would require retraining word2vec N times (infeasible),
+        # so the acceleration term is 0 — this is the bias-corrected (BC) interval, which
+        # still fixes the median-bias the percentile interval ignores. z0 uses the original
+        # drift estimate; fall back to the percentile CI if it is unavailable.
+        obs = orig_drift.get(lid)
+        if obs is not None:
+            lo, hi = _bca(float(obs), rs, [], alpha=0.05)
+            ci_by_id[lid] = (round(lo, 4), round(hi, 4))
+        else:
+            ci_by_id[lid] = _percentile_ci(rs)
         cs = control[lid]
         if len(cs) >= MIN_SAMPLES:
             mu_c = float(np.mean(cs))
