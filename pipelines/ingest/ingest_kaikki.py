@@ -281,9 +281,15 @@ def upsert_lemma(conn: sqlite3.Connection, lemma: str, pos: str, gender: str, so
             srcs.add(source)
             conn.execute("UPDATE lemmas SET sources = ? WHERE id = ?", (",".join(sorted(srcs)), lemma_id))
         return lemma_id
+    # lemma_class (Phase 2 / audit F37): proper names are 76% of the lexicon and
+    # distort every coverage/frequency figure and crowd search. Tag by POS here; the
+    # gloss-based refinement (a noun whose every sense is «επώνυμο») is applied by the
+    # post-ingest classify_lemma_class pass, which needs the senses to exist first.
+    lemma_class = "name" if pos == "name" else "content"
     cur = conn.execute(
-        "INSERT INTO lemmas (lemma, normalized_lemma, pos, gender, sources) VALUES (?,?,?,?,?)",
-        (lemma, norm, pos, gender, source),
+        "INSERT INTO lemmas (lemma, normalized_lemma, pos, gender, sources, lemma_class) "
+        "VALUES (?,?,?,?,?,?)",
+        (lemma, norm, pos, gender, source, lemma_class),
     )
     return cur.lastrowid
 
