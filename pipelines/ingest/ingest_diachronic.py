@@ -672,6 +672,13 @@ def main() -> None:
     ap.add_argument("--pool-target", type=int, default=200_000,
                     help="Target lines per slice for --pool-adaptive (expand window until met).")
     ap.add_argument("--seed", type=int, default=0, help="Seed for pooled-reservoir sampling.")
+    ap.add_argument("--sg", type=int, default=1, choices=(0, 1),
+                    help="1=skip-gram/SGNS (default, Hamilton 2016), 0=CBOW.")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="word2vec workers. 1 (default) = bit-reproducible point estimate "
+                         "(F44/F50); higher is faster but nondeterministic (~0.0024 drift).")
+    ap.add_argument("--reliability-floor", type=int, default=20,
+                    help="Suppress DRIFT for a lemma below this per-era count (#51). 0 disables.")
     ap.add_argument("--neighbor-min-count", type=int, default=50,
                     help="Suppress era-neighbours for a lemma whose per-era training count is "
                          "below this (#51: rare-word neighbours are noise). 0 disables the floor.")
@@ -716,6 +723,7 @@ def main() -> None:
             pool_window=args.pool_window, pool_cap=args.pool_cap,
             pool_adaptive=args.pool_adaptive, pool_target=args.pool_target,
             seed=args.seed, neighbor_min_count=args.neighbor_min_count,
+            reliability_floor=args.reliability_floor, sg=args.sg, workers=args.workers,
         ),
         indent=2, ensure_ascii=False,
     ))
