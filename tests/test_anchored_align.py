@@ -47,8 +47,15 @@ def _build(n_stable=80, n_drift=20, d=12, seed=0):
     return base, other, stable_keys, drift_keys, Q
 
 
+def _cos(a, b):
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    return 1.0 - (a @ b) / (na * nb) if na and nb else 1.0
+
+
 def _mean_stable_residual(base, aligned, key_index, stable_keys):
-    res = [np.linalg.norm(aligned[key_index[w]] - base[w]) for w in stable_keys]
+    # Cosine distance, matching how drift is actually measured (_cos_dist is scale-free)
+    # and the Hamilton-compliant _align, which now L2-normalizes its output (F14).
+    res = [_cos(aligned[key_index[w]], base[w]) for w in stable_keys]
     return float(np.mean(res))
 
 
@@ -57,7 +64,7 @@ def test_anchored_recovers_stable_words():
     aligned, key_index = _align(base, other)
     assert aligned is not None
     # Stable words should align almost perfectly (drifters pruned out of the fit).
-    assert _mean_stable_residual(base, aligned, key_index, stable_keys) < 0.05
+    assert _mean_stable_residual(base, aligned, key_index, stable_keys) < 0.02
 
 
 def test_anchored_beats_naive_full_fit():
@@ -65,13 +72,16 @@ def test_anchored_beats_naive_full_fit():
     on the stable words than a naive fit over the full shared vocabulary."""
     base, other, stable_keys, drift_keys, _Q = _build(seed=3)
 
-    # naive full-vocab Procrustes (the old behaviour)
+    # naive full-vocab Procrustes on L2-normalized rows (matches the fixed _align, minus
+    # the anchor pruning), residual in cosine space.
+    def _unit(M):
+        return M / np.linalg.norm(M, axis=1, keepdims=True)
     all_keys = stable_keys + drift_keys
-    A = np.vstack([other[w] for w in all_keys])
-    B = np.vstack([base[w] for w in all_keys])
+    A = _unit(np.vstack([other[w] for w in all_keys]))
+    B = _unit(np.vstack([base[w] for w in all_keys]))
     R_naive, _ = orthogonal_procrustes(A, B)
     naive_res = float(np.mean([
-        np.linalg.norm(other[w] @ R_naive - base[w]) for w in stable_keys]))
+        _cos(other[w] @ R_naive, base[w]) for w in stable_keys]))
 
     aligned, key_index = _align(base, other)
     anchored_res = _mean_stable_residual(base, aligned, key_index, stable_keys)

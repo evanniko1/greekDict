@@ -38,6 +38,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import random
 import sys
@@ -49,6 +50,10 @@ from ingest_kaikki import init_db, record_attribution  # noqa: E402
 from ingest_collocations import STOPWORDS  # noqa: E402
 from normalize_greek import normalize_keep_accents  # noqa: E402
 import corpus_sources as cs  # noqa: E402
+
+sys.path.insert(0, os.path.join(ROOT, "pipelines", "analysis"))
+from estimators import change_point as _pettitt_change_point  # noqa: E402
+from embedding_ops import balanced_pool_budget, is_reliable  # noqa: E402
 
 DEFAULT_TOP_N = 8
 MIN_NEIGHBOR_LEN = 3
@@ -128,16 +133,28 @@ def existing_slices(corpus: str) -> list[tuple[int, str]]:
 
 # ── train + align + drift ─────────────────────────────────────────────────────
 
-def _train(path: str, vector_size: int, window: int, min_count: int, epochs: int):
+def _train(path: str, vector_size: int, window: int, min_count: int, epochs: int,
+           sg: int = 1, workers: int = 1, seed: int = 0):
+    """Train one slice's word2vec.
+
+    Defaults changed for the corrected rebuild (audit F14/F44/F50):
+      · sg=1 (skip-gram/SGNS) — Hamilton et al. 2016 use SGNS, and the sibling
+        classify_domains already does; CBOW (sg=0) was an inconsistency.
+      · workers=1 + a fixed seed — gensim is nondeterministic with workers>1 even when
+        seeded, which manufactured ~0.0024 of apparent drift (D3). workers=1 makes the
+        point estimate bit-reproducible. Callers that only need a stochastic bootstrap
+        replicate may pass a higher `workers` for speed.
+    """
     from gensim.models import Word2Vec
     return Word2Vec(
         corpus_file=path,
         vector_size=vector_size,
         window=window,
         min_count=min_count,
-        workers=os.cpu_count() or 4,
-        sg=0,
+        workers=workers,
+        sg=sg,
         epochs=epochs,
+        seed=seed,
     )
 
 
@@ -169,38 +186,47 @@ def _adaptive_members(center: int, years: list[int], line_count: dict[int, int],
     return _pool_members(center, years, max_window)  # never reached target → widest band
 
 
-def _pooled_to_tempfile(member_paths: list[str], cap: int, tmp_dir: str) -> str:
-    """Concatenate member slice files into one temp training file. When `cap`>0 and
-    the pooled corpus exceeds it, keep a uniform RESERVOIR sample of `cap` lines.
+def _reservoir(path: str, k: int) -> list[str]:
+    """Uniform sample of up to `k` lines from one file (k<=0 → all lines)."""
+    if k <= 0:
+        with open(path, encoding="utf-8") as fh:
+            return fh.readlines()
+    out: list[str] = []
+    n = 0
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            n += 1
+            if len(out) < k:
+                out.append(line)
+            elif (j := random.randint(0, n - 1)) < k:
+                out[j] = line
+    return out
 
-    Rationale for the cap: pooling helps THIN years (which stay well under the cap
-    and so keep every sentence); the cap only ever bites on already-dense years
-    (e.g. news 2024 ≈ 1M lines × a 5-yr band), which were stable without pooling
-    anyway — so bounding their training set trades nothing real for tractable
-    runtime. Returns the temp path; caller deletes it."""
-    fd, path = tempfile.mkstemp(suffix=".txt", dir=tmp_dir)
+
+def _pooled_to_tempfile(member_paths: list[str], cap: int, tmp_dir: str) -> str:
+    """Concatenate a ±window band of member slices into one temp training file, drawing
+    an EQUAL number of lines from each member (F15 / #49).
+
+    The old code reservoir-sampled uniformly over the concatenated files, so the mixture
+    was weighted by each year's raw line count: with the news 300k→1M jump at 2019, the
+    slice labelled 2018 came out 69% 2019–2020 text (centroid 2018.72). Balanced
+    per-member sampling makes the pooled slice's content centroid equal its label year,
+    which is what the drift/change-point semantics assume. Returns the temp path."""
+    counts = {i: _count_lines(mp) for i, mp in enumerate(member_paths)}
     if cap and cap > 0:
-        reservoir: list[str] = []
-        n = 0
-        for mp in member_paths:
-            with open(mp, encoding="utf-8") as fh:
-                for line in fh:
-                    n += 1
-                    if len(reservoir) < cap:
-                        reservoir.append(line)
-                    else:
-                        j = random.randint(0, n - 1)
-                        if j < cap:
-                            reservoir[j] = line
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            out.writelines(reservoir)
+        budget = balanced_pool_budget(counts, cap)  # equal share per member, capped
     else:
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            for mp in member_paths:
-                with open(mp, encoding="utf-8") as fh:
-                    for line in fh:
-                        out.write(line)
+        budget = counts  # no cap → take every line of every member
+    fd, path = tempfile.mkstemp(suffix=".txt", dir=tmp_dir)
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        for i, mp in enumerate(member_paths):
+            out.writelines(_reservoir(mp, budget.get(i, 0)))
     return path
+
+
+def _count_lines(path: str) -> int:
+    with open(path, encoding="utf-8") as fh:
+        return sum(1 for _ in fh)
 
 
 def _cos_dist(a, b) -> float:
@@ -245,16 +271,22 @@ def change_point_year(series: list[tuple[int, float]], min_z: float = 2.0):
 
 def _align(base_wv, other_wv, anchor_top: int = 5000,
            prune_iters: int = 2, prune_frac: float = 0.25):
-    """Rotate other_wv into base_wv's frame via orthogonal Procrustes, fit only on
-    stable anchors (#48): the high-frequency core shared by both slices, then
-    iteratively dropping the highest-residual (drifted) anchors and refitting — so the
-    words that moved don't pull the frame. Returns (aligned_matrix, key_index) for ALL
-    of other_wv's keys (the rotation is applied to every vector, not just the anchors)."""
+    """Rotate other_wv into base_wv's frame via Hamilton-compliant orthogonal Procrustes
+    (#48 / F14): L2-normalize rows before fitting (Hamilton 2016 §3.1), and prune anchors
+    by a SCALE-FREE cosine residual — the old Euclidean residual ‖A·R−B‖ scaled with
+    vector norm and so evicted the highest-frequency, best-estimated words, the opposite
+    of "keep stable high-frequency anchors" (corr(residual,norm) was 0.99). Fit on the
+    high-frequency shared core, iteratively dropping the most-drifted anchors. Returns
+    (aligned_matrix, key_index) for ALL of other_wv's keys."""
     import numpy as np
     from scipy.linalg import orthogonal_procrustes
 
+    def _unit(M):
+        n = np.linalg.norm(M, axis=1, keepdims=True)
+        n[n == 0] = 1.0
+        return M / n
+
     base_rank = {w: i for i, w in enumerate(base_wv.index_to_key)}
-    # Candidate anchors: shared words inside the top-`anchor_top` frequency core of both.
     anchors = [w for i, w in enumerate(other_wv.index_to_key)
                if i < anchor_top and base_rank.get(w, anchor_top) < anchor_top]
     if len(anchors) < 10:  # frequent core too sparse → fall back to full shared vocab
@@ -262,14 +294,14 @@ def _align(base_wv, other_wv, anchor_top: int = 5000,
     if len(anchors) < 10:
         return None, None
 
-    A = np.vstack([other_wv[w] for w in anchors])   # to be rotated
-    B = np.vstack([base_wv[w] for w in anchors])     # target frame
+    A = _unit(np.vstack([other_wv[w] for w in anchors]))  # L2-normalized (Hamilton)
+    B = _unit(np.vstack([base_wv[w] for w in anchors]))
     R, _ = orthogonal_procrustes(A, B)
-    # Iteratively prune drifted anchors (highest alignment residual) and refit.
     for _ in range(max(0, prune_iters)):
         if len(A) < 20:
             break
-        resid = np.linalg.norm(A @ R - B, axis=1)
+        # scale-free cosine residual (rows are already unit-norm, so 1 − dot)
+        resid = 1.0 - np.sum(_unit(A @ R) * B, axis=1)
         thresh = np.quantile(resid, 1.0 - prune_frac)
         keep = resid <= thresh
         if keep.all() or int(keep.sum()) < 10:
@@ -277,8 +309,9 @@ def _align(base_wv, other_wv, anchor_top: int = 5000,
         A, B = A[keep], B[keep]
         R, _ = orthogonal_procrustes(A, B)
 
-    # Apply the fitted rotation to *all* of other_wv's vectors, not just the anchors.
-    full = np.vstack([other_wv[w] for w in other_wv.index_to_key])
+    # Apply R to ALL of other_wv's vectors (normalized), not just the anchors. Drift is
+    # read via cosine distance (scale-free), so normalizing here is consistent.
+    full = _unit(np.vstack([other_wv[w] for w in other_wv.index_to_key]))
     aligned = full @ R
     return aligned, {w: i for i, w in enumerate(other_wv.index_to_key)}
 
@@ -302,6 +335,9 @@ def ingest_diachronic(
     pool_target: int = 200_000,
     seed: int = 0,
     neighbor_min_count: int = 50,
+    reliability_floor: int = 20,
+    sg: int = 1,
+    workers: int = 1,
 ) -> dict:
     import numpy as np
 
@@ -380,7 +416,7 @@ def ingest_diachronic(
             mpaths = [path_by_year[m] for m in members]
             ppath = _pooled_to_tempfile(mpaths, pool_cap, pool_tmp_dir)
             try:
-                wvs[year] = _train(ppath, vector_size, window, min_count, epochs).wv
+                wvs[year] = _train(ppath, vector_size, window, min_count, epochs, sg=sg, workers=workers, seed=seed).wv
             finally:
                 try:
                     os.remove(ppath)
@@ -389,7 +425,7 @@ def ingest_diachronic(
             print(f"  · {corpus}/{year}: vocab {len(wvs[year].index_to_key)} "
                   f"(pooled {members[0]}–{members[-1]}, {len(members)} yr)", file=sys.stderr)
         else:
-            wvs[year] = _train(path, vector_size, window, min_count, epochs).wv
+            wvs[year] = _train(path, vector_size, window, min_count, epochs, sg=sg, workers=workers, seed=seed).wv
             print(f"  · {corpus}/{year}: vocab {len(wvs[year].index_to_key)}", file=sys.stderr)
     if pool_tmp_dir:
         try:
@@ -497,11 +533,15 @@ def ingest_diachronic(
                     (lid, corpus, y, dist, source),
                 )
                 traj_rows += 1
-            cp_year, cp_score = change_point_year(series)
-            if cp_score is not None:
-                change_point_score[lid] = cp_score
-            if cp_year is not None:
-                change_point[lid] = cp_year
+            # Change point via the landed Pettitt test (F5/F9) — a LOCATION-shift test
+            # with a real p-value, so a lone corpus-gap spike no longer wins (the old
+            # argmax collapsed 82.6% of news words onto the 2016 gap year). Store the
+            # year AND a significance score only when significant, so the honesty gate
+            # (show «καμπή» iff change_point_score present) fires correctly.
+            cp = _pettitt_change_point(series, alpha=0.05)
+            if cp.significant and cp.label is not None:
+                change_point[lid] = cp.label
+                change_point_score[lid] = round(-math.log10(max(cp.p_value, 1e-6)), 2)
 
     # ── drift: cosine distance first vs last (anchored), in a shared frame ──
     # Plus a SECOND, frequency-robust change measure (Gonen et al. 2020): the
@@ -542,6 +582,14 @@ def ingest_diachronic(
 
             for lid, nlemma in lemma_norm.items():
                 if nlemma not in base_wv or nlemma not in key_index:
+                    continue
+                # Per-era reliability floor (#51): below ~20 occurrences in an endpoint
+                # slice a lemma's vector is dominated by estimation noise (its drift is
+                # indistinguishable from the no-change control, D3), so we don't publish
+                # a drift number for it. Measured on real news models: SNR 1.45 at count
+                # 5–20 vs 2.1 at 50+.
+                if not (is_reliable(base_wv.get_vecattr(nlemma, "count"), reliability_floor)
+                        and is_reliable(other_wv.get_vecattr(nlemma, "count"), reliability_floor)):
                     continue
                 v_first = base_wv[nlemma]
                 v_last = aligned[key_index[nlemma]]
