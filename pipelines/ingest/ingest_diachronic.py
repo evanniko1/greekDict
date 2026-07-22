@@ -611,6 +611,11 @@ def ingest_diachronic(
               file=sys.stderr)
 
     conn.commit()
+    import manifest as _mf
+    _mf.record_build(conn, "ingest_diachronic", version=corpus,
+                     params={"corpus": corpus, "sg": sg, "workers": workers,
+                             "pool_window": pool_window, "reliability_floor": reliability_floor},
+                     tables=["diachronic_drift", "diachronic_trajectory", "diachronic_neighbors"])
     conn.close()
     return {
         "corpus": corpus,

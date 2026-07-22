@@ -351,6 +351,9 @@ def bootstrap_drift(
         updated += 1
 
     conn.commit()
+    import manifest as _mf
+    _mf.record_build(conn, "bootstrap_drift", version=f"{corpus}:K{k}",
+                     params={"corpus": corpus, "k": k}, tables=[])
     conn.close()
     # best-effort temp cleanup
     try:

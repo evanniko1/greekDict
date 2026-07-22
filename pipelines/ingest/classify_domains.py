@@ -321,6 +321,12 @@ def classify_domains(
             "WHERE source='classifier' GROUP BY domain ORDER BY n DESC"
         )
     }
+    import manifest as _mf
+    _mf.record_build(conn, "classify_domains",
+                     version=f"cal={'isotonic' if calibrated else 'none'}",
+                     params={"calibrated": calibrated, "target_precision": target_precision,
+                             "ece_raw": ece_raw, "ece_calibrated": ece_cal},
+                     tables=["lemma_domain_pred"])
     conn.close()
 
     return {

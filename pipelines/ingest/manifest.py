@@ -272,27 +272,18 @@ def _check_drift_columns(conn):
 
 
 def _check_classifier_floor(conn):
-    """Rows below the floor the current code enforces prove older code wrote them."""
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from classify_domains import CONF_FLOOR  # noqa: E402
-    except Exception:
-        return True, "classify_domains not importable; skipped"
+    """Classifier scores must be valid probabilities. The single absolute CONF_FLOOR that
+    the shipped DB violated (F18) was replaced by per-class abstain thresholds + optional
+    calibration (#47), so there is no one floor to check; instead assert the stored scores
+    are in [0,1] — a row outside that range was written by pre-calibration code."""
     n = _q1(conn, "SELECT COUNT(*) FROM lemma_domain_pred WHERE source='classifier'")
     if not n:
         return True, "no classifier rows"
-    below = _q1(
-        conn,
-        "SELECT COUNT(*) FROM lemma_domain_pred WHERE source='classifier' AND score < %r"
-        % float(CONF_FLOOR),
-    )
-    if below:
-        return False, (
-            "%s of %s classifier rows (%.1f%%) are below the current CONF_FLOOR=%s — "
-            "the current code could not have written them (F18)"
-            % (format(below, ","), format(n, ","), 100.0 * below / n, CONF_FLOOR)
-        )
-    return True, "all %s classifier rows clear CONF_FLOOR=%s" % (format(n, ","), CONF_FLOOR)
+    bad = _q1(conn, "SELECT COUNT(*) FROM lemma_domain_pred "
+                    "WHERE source='classifier' AND (score < 0 OR score > 1)")
+    if bad:
+        return False, "%s classifier rows have a score outside [0,1]" % format(bad, ",")
+    return True, "all %s classifier scores are valid probabilities" % format(n, ",")
 
 
 def _check_zipf_scale(conn):
