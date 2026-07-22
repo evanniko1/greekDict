@@ -124,7 +124,7 @@ export default function SearchPage() {
     <div className={isLanding ? "flex flex-col items-center pt-16 sm:pt-24" : "flex flex-col gap-5"}>
       {isLanding ? (
         <div className="flex w-full flex-col items-center text-center">
-          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">Λεξόραμα</h1>
+          <h1 className="font-display text-5xl sm:text-6xl">Λεξόραμα</h1>
           <p className="mt-3 max-w-md text-balance text-slate-500 dark:text-slate-400">
             Ένα ανοιχτό, οπτικό λεξικό για τα Νέα Ελληνικά. Γράψε οποιονδήποτε τύπο
             και ανάγεται στο λήμμα του — με εξήγηση.

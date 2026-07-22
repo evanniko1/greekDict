@@ -350,7 +350,7 @@ export default function MethodologyPage() {
       <Link to="/explore" className="text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100">
         ← Εξερεύνηση
       </Link>
-      <h1 className="mt-2 text-2xl font-bold tracking-tight">Μεθοδολογία</h1>
+      <h1 className="mt-2 font-display text-3xl">Μεθοδολογία</h1>
       <p className="text-sm text-slate-600 dark:text-slate-400">
         Πώς μετράμε τη διαχρονική αλλαγή της γλώσσας — τα σώματα κειμένων, κάθε μέτρο
         αλλαγής, και οι ειλικρινείς περιορισμοί του καθενός. Κάθε μέτρο στηρίζεται σε

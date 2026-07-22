@@ -153,7 +153,7 @@ function EntryDefinitions({ entry, showEn }: { entry: WordEntry; showEn: boolean
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex flex-wrap items-baseline gap-2">
-        <h2 className="text-3xl font-bold">{entry.lemma}</h2>
+        <h2 className="font-display text-3xl">{entry.lemma}</h2>
         {entry.pronunciations.length > 0 && (
           <span className="font-mono text-base text-slate-500 dark:text-slate-400" title="Προφορά (IPA)">
             {entry.pronunciations.map((p) => `/${p.ipa}/`).join(" ")}

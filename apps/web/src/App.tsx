@@ -16,7 +16,7 @@ export default function App() {
       <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
         <header className="border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-900/80">
           <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-4">
-            <Link to="/" className="text-2xl font-bold tracking-tight">
+            <Link to="/" className="font-display text-2xl text-slate-900 dark:text-slate-100">
               Λεξόραμα
             </Link>
             <div className="flex items-center gap-4">

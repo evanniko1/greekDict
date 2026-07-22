@@ -525,7 +525,7 @@ export default function ExplorePage() {
   return (
     <div className="flex flex-col gap-5">
       <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-bold tracking-tight">Εξερεύνηση</h1>
+        <h1 className="font-display text-3xl">Εξερεύνηση</h1>
         <p className="max-w-2xl text-sm text-slate-600 dark:text-slate-400">
           Πώς άλλαξε η ελληνική γλώσσα μέσα στον χρόνο — συχνότητα και σημασία — σε
           σώματα κειμένων που κρατούν τον δικό τους άξονα το καθένα.

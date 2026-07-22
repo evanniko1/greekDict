@@ -149,7 +149,7 @@ export default function AboutPage() {
       <Link to="/" className="text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100">
         ← Αναζήτηση
       </Link>
-      <h1 className="mt-2 text-2xl font-bold tracking-tight">Γλωσσάρι & σχεδιαστική λογική</h1>
+      <h1 className="mt-2 font-display text-3xl">Γλωσσάρι & σχεδιαστική λογική</h1>
       <p className="text-sm text-slate-600 dark:text-slate-400">
         Τι σημαίνουν οι όροι που βλέπεις στις σελίδες λέξεων — και γιατί το Λεξόραμα
         είναι φτιαγμένο έτσι.

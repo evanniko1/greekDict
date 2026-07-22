@@ -4,6 +4,51 @@
    toggle (.dark on <html>) drives `dark:` utilities instead of prefers-color-scheme. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Anthropic-style design system.
+
+   The palette and type are lifted from Anthropic's own surfaces (claude.com):
+   warm "paper" #FAF9F5 and warm "ink" #141413 instead of cool white/black, a
+   near-monochromatic warm-gray ramp, a single clay/terracotta accent used
+   sparingly, and a serif for display type over a grotesque sans for body.
+
+   Rather than rewrite ~550 hard-coded colour classes, we RETINT Tailwind's own
+   `slate` (the dominant neutral) and `violet` (the accent) token ramps here, so
+   every existing `bg-slate-*` / `text-violet-*` renders in the warm system. Greek
+   coverage drove the font fallbacks: Georgia (serif) and Arial/system (sans) both
+   carry full Greek incl. polytonic, so no web-font download is needed.
+   ────────────────────────────────────────────────────────────────────────── */
+@theme {
+  /* Neutral ramp — warm "sand/stone", anchored on Anthropic paper→ink. */
+  --color-slate-50:  #faf9f5;  /* paper — page background            */
+  --color-slate-100: #f2f0e9;  /* raised surface / hover / dark text */
+  --color-slate-200: #e7e4d9;  /* hairline borders                   */
+  --color-slate-300: #d7d3c5;  /* stronger borders                   */
+  --color-slate-400: #b0aea5;  /* muted icons / disabled             */
+  --color-slate-500: #87867f;  /* secondary / muted text             */
+  --color-slate-600: #5e5d59;  /* body-secondary text                */
+  --color-slate-700: #46453f;  /* body text                          */
+  --color-slate-800: #30302e;  /* dark raised surface                */
+  --color-slate-900: #1f1e1d;  /* dark card / surface                */
+  --color-slate-950: #141413;  /* ink — darkest bg / strongest text  */
+
+  /* Accent ramp — Anthropic clay / terracotta, used sparingly for interaction. */
+  --color-violet-50:  #fbf1ec;
+  --color-violet-100: #f6ded1;
+  --color-violet-200: #edc1ac;
+  --color-violet-300: #e0a184;
+  --color-violet-400: #d3805f;
+  --color-violet-500: #c96442;  /* clay */
+  --color-violet-600: #bd5637;  /* primary — links, active, focus (AA on paper) */
+  --color-violet-700: #9c4429;
+  --color-violet-800: #7d3721;
+  --color-violet-900: #632c1b;
+
+  /* Display serif (Greek-complete) for wordmark + headings; sans for body. */
+  --font-serif: Georgia, "Times New Roman", "GFS Didot", serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, Arial, "Helvetica Neue", sans-serif;
+}
+
 @layer base {
   :root {
     color-scheme: light;
@@ -11,8 +56,32 @@
   .dark {
     color-scheme: dark;
   }
-  /* Smooth the light/dark flip without animating layout. */
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
   body {
+    background-color: var(--color-slate-50);
+    color: var(--color-slate-800);
+    font-family: var(--font-sans);
+    /* Smooth the light/dark flip without animating layout. */
     transition: background-color 0.2s ease, color 0.2s ease;
+  }
+  .dark body {
+    background-color: var(--color-slate-950);
+    color: var(--color-slate-100);
+  }
+  /* Serif, medium-weight display type is the Anthropic signature. `.font-display`
+     is applied to the wordmark, the search hero and page titles — NOT to the small
+     uppercase eyebrow labels, which stay sans. */
+  .font-display {
+    font-family: var(--font-serif);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  /* Warm, restrained selection colour. */
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-violet-500) 22%, transparent);
   }
 }
