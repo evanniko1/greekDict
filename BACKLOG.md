@@ -327,8 +327,18 @@ has `change_point_score`/`drift_score_boot` NULL until the rebuild runs the new 
   `g2_p_value`, `hardie_log_ratio` (with CI) and `bh_fdr`; unit-tested. **Remaining:** apply
   `bh_fdr` across the simultaneous keyness tests in `explore_compare` and report q, not a
   raw p<0.001 claim (F20/F43).
-- [ ] **#47** Platt/isotonic calibration + abstain option + per-field precision.
-  <sub>F16, F17, F45.</sub>
+- [x] **#47 — classifier calibration landed + WIRED.** (F16/F17/F45)
+  [`calibration.py`](pipelines/analysis/calibration.py): per-class isotonic calibration,
+  ECE/Brier/reliability diagnostics, per-class abstain thresholds tuned to a precision
+  target, and a precision+coverage report computed under the *deployed* rule (so the
+  reported number is the shipped one, F45). Unit-tested (10): isotonic cuts ECE
+  **0.157→0.057** on over-confident scores; per-class thresholds hit a precision target
+  where a single gate cannot; precision/coverage trade-off holds. **Wired into
+  `classify_domains.py`**: CalibratedClassifierCV(isotonic) replaces raw softmax,
+  per-class thresholds replace the meaningless absolute `CONF_FLOOR=0.50` (F17), the
+  report now describes the deployed calibrated+abstain rule, and it falls back to the raw
+  model if a thin field breaks the CV folds (never crashes the rebuild). Runs at the Tier
+  B rebuild — the empirical per-field numbers land then.
 - [x] **#48 — Hamilton-compliant alignment landed (offline).**
   [`embedding_ops.procrustes_align`](pipelines/analysis/embedding_ops.py) L2-normalizes
   before Procrustes and prunes anchors by a SCALE-FREE cosine residual, not the Euclidean
