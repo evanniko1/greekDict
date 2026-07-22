@@ -300,21 +300,33 @@ Carried over from `docs/backlog.md` (now folded in). These are *wanted*, not def
 
 ### Methodology waves #43–#51 — reconcile against the audit
 
-Code-complete per the old backlog, awaiting a batched overnight re-run
-(`pipelines/ingest/_reingest_methodology_waves.sh`, bootstrap K=100 ≈ 8–10 h).
-**The audit found the shipped DB does not contain their output** — `change_point_score`
-and `drift_score_boot` are NULL in 100% of 20,265 rows, and only 1,266 of the ~18,228
-claimed CIs survive. Treat every item below as *written but unlanded* until R1 can prove
-otherwise.
+**Approach (post-D3):** the corrected estimators are landed OFFLINE as pure, tested
+functions in [`pipelines/analysis/estimators.py`](pipelines/analysis/estimators.py) and
+validated against a null in the harness FIRST; wiring them into `ingest_diachronic` /
+`main.py` and repopulating is a later step, gated behind the Tier B rebuild (D3). This is
+why "landed (offline)" below does not yet change any served number — the shipped DB still
+has `change_point_score`/`drift_score_boot` NULL until the rebuild runs the new code.
 
-- [ ] **#43** Bootstrap K=12 → K≥100 via BCa or a permutation test.
-  <sub>F11: measured coverage of the K=12 percentile CI is 82.0%, and 430/1,266 point
-  estimates fall outside their own CI.</sub>
-- [ ] **#44** `change_point_year` argmax → PELT/CUSUM/binary segmentation with a null.
-  <sub>F5, F9: all 20,255 change points shipped ungated; 82.6% of news collapses to 2016,
-  the first slice after a corpus gap.</sub>
-- [ ] **#45** Newey–West HAC or Mann–Kendall for trend slopes. <sub>F10, F39.</sub>
-- [ ] **#46** Dunning G² / Hardie Log Ratio keyness with CIs. <sub>F20, F43.</sub>
+- [x] **#43 — BCa interval landed (offline).** `estimators.bca_interval` (bias-correction
+  + acceleration, Efron 1987); coverage unit-tested at ≥0.88 vs the K=12 percentile's ~0.82
+  (F11). **Remaining:** wire into `bootstrap_drift.py` and run at K≥100 (the expensive Tier
+  B step) — the interval maths is done, the resampling volume is not.
+- [x] **#44 — change-point landed + null-validated (offline).** `estimators.change_point`
+  (Pettitt 1979 + optional permutation null) replaces the argmax+robust-z heuristic (F5/F9).
+  `pipelines/analysis/validate_change_point.py` on a real news no-change trajectory:
+  **[A]** flat noise FP 0.0% (new) vs 0.2% (old); **[B]** with one gap-sized spike injected,
+  **new 0.0% vs old 100.0%** — reproducing and fixing the "82.6% collapse to the 2016 gap
+  year" failure. **Remaining:** wire into `ingest_diachronic.change_point_year`.
+- [x] **#45 — autocorrelation-robust trend landed (offline).** `estimators.mann_kendall`
+  adds the Hamed & Rao (1998) correction (var(S) inflated by the effective-sample-size
+  factor, with the significance filter) so p is honest on serially-correlated annual series
+  (F10/F39); unit-tested that it is ≥ the naive p under positive autocorrelation and ≈naive
+  for iid. **Remaining:** swap `main.py:_mann_kendall_p` for it; separate the R²-selection
+  from the significance test (F10 circularity).
+- [x] **#46 — keyness CI + FDR landed (offline).** `estimators` exposes `dunning_g2`,
+  `g2_p_value`, `hardie_log_ratio` (with CI) and `bh_fdr`; unit-tested. **Remaining:** apply
+  `bh_fdr` across the simultaneous keyness tests in `explore_compare` and report q, not a
+  raw p<0.001 claim (F20/F43).
 - [ ] **#47** Platt/isotonic calibration + abstain option + per-field precision.
   <sub>F16, F17, F45.</sub>
 - [ ] **#48** Anchored Procrustes on stable high-frequency words only.
