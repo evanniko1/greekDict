@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS lemmas (
     gender           TEXT,
     language         TEXT DEFAULT 'el',
     sources          TEXT,                   -- comma list: "el-wiktionary,en-wiktionary"
+    lemma_class      TEXT NOT NULL DEFAULT 'content',  -- content | name (Phase 2 / F37)
     UNIQUE (lemma, pos)
 );
 CREATE INDEX IF NOT EXISTS idx_lemmas_norm ON lemmas (normalized_lemma);

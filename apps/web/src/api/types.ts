@@ -14,6 +14,7 @@ export interface SearchResult {
   via: string;
   score: number;
   snippet: string | null;
+  is_name?: boolean;
 }
 
 export interface SearchResponse {
@@ -21,6 +22,9 @@ export interface SearchResponse {
   normalized: string;
   resolved: boolean;
   results: SearchResult[];
+  /** Proper names matching the query, kept out of the primary results so surnames
+   *  (76% of the lexicon) don't crowd out real words (F37). */
+  name_results: SearchResult[];
 }
 
 export interface Sense {

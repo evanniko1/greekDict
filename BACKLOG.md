@@ -372,10 +372,15 @@ has `change_point_score`/`drift_score_boot` NULL until the rebuild runs the new 
 
 Not bugs to fix silently; these are scope and philosophy calls.
 
-- [?] **D1 — Proper names.** 75.4% of lemmas are `pos='name'` (336,873 of 446,840) (F37).
-  Every coverage and frequency statistic is computed over a lexicon that is
-  three-quarters surnames. Decide: exclude names, split them into their own namespace, or
-  keep them and re-baseline every reported number.
+- [x] **D1 — Proper names: SPLIT into their own namespace (Phase 2, 2026-07-22).** 76.0%
+  of lemmas are names (355,575 of 463,411); the honest lexicon is **107,836 content
+  lemmas**. Resolved by tagging `lemmas.lemma_class` ('content'|'name') —
+  `classify_lemma_class.py` (pos='name' OR every sense a name gloss; a word that is *also*
+  a real word stays content). `/api/search` now routes names to a separate `name_results`
+  list so surnames never crowd out real words; `/api/stats` reports the content count;
+  the search page shows names under a de-emphasized «Κύρια ονόματα» group. Wired into
+  ingest + a standalone backfill (run on the current DB); the rebuild picks it up.
+  8 tests. Verified: «Παπαδόπουλος» → name_results only; «νόμος» → νόμος + νομός as content.
 - [?] **D2 — Scope discipline.** 14 word-page surfaces and 20 pipelines against 2 measured
   quality numbers (F54). Which surfaces earn their keep?
   <sub>Audit §5 "What to CUT" has a concrete proposal.</sub>

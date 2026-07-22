@@ -42,6 +42,13 @@ def db() -> sqlite3.Connection:
     # Creating them empty (idempotent) keeps /api/word working without a re-ingest;
     # they fill in on the next ingest pass. CREATE IF NOT EXISTS is a no-op once present.
     conn.executescript(_manifest.DDL)
+    # Forward-compat for the Phase 2 name split: a DB built before lemma_class lacks the
+    # column. Add it (defaulting every row to 'content') so the split degrades to
+    # "nothing is a name" rather than 500ing; classify_lemma_class fills it in.
+    try:
+        conn.execute("ALTER TABLE lemmas ADD COLUMN lemma_class TEXT NOT NULL DEFAULT 'content'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.execute(
         "CREATE TABLE IF NOT EXISTS etymology ("
         "lemma_id INTEGER PRIMARY KEY REFERENCES lemmas(id), text TEXT, source TEXT NOT NULL)"
@@ -183,6 +190,14 @@ def _en_key(q: str) -> str:
     return s.strip(" .,;:!?\"'()[]")
 
 
+def _row_get(row, key, default=None):
+    """sqlite3.Row raises IndexError on a missing column; this is a safe .get()."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 def _features_label(features_json: str | None) -> str | None:
     if not features_json:
         return None
@@ -266,12 +281,18 @@ def search(q: str = Query(..., min_length=1, max_length=120),
     key = normalize(q)
 
     seen: set[int] = set()
-    results: list[dict] = []
+    results: list[dict] = []       # content lemmas — the primary answer
+    name_results: list[dict] = []  # proper names — a separate, secondary namespace (F37)
+    NAME_LIMIT = 12
 
     def _emit(r, via: str, en_term: str | None = None) -> None:
         if r["lemma_id"] in seen:
             return
         seen.add(r["lemma_id"])
+        # Proper names are 76% of the lexicon and, sorting after content by frequency,
+        # would otherwise fill the results with surnames. Route them to their own list
+        # so a search for a real word is never crowded out by homographic names.
+        is_name = _row_get(r, "lemma_class") == "name"
         is_form = r["surface_type"] == "form"
         feat = _features_label(r["features"])
         if via == "translation":
@@ -287,13 +308,15 @@ def search(q: str = Query(..., min_length=1, max_length=120),
         else:
             match_type = "lemma" if via == "direct" else "greeklish"
             explanation = r["lemma"]
+        if is_name and len(name_results) >= NAME_LIMIT:
+            return
         snippet_row = conn.execute(
             "SELECT gloss FROM senses WHERE lemma_id = ? ORDER BY sense_index LIMIT 1",
             (r["lemma_id"],),
         ).fetchone()
-        results.append({
+        (name_results if is_name else results).append({
             "lemma_id": r["lemma_id"], "lemma": r["lemma"],
-            "pos": r["pos"], "gender": r["gender"],
+            "pos": r["pos"], "gender": r["gender"], "is_name": is_name,
             "match_type": match_type, "matched_surface": r["surface"],
             "features": feat, "explanation": explanation, "via": via,
             "score": round(float(r["rank_weight"]), 3),
@@ -316,7 +339,7 @@ def search(q: str = Query(..., min_length=1, max_length=120),
     for r in conn.execute(
         """
         SELECT si.lemma_id, si.surface, si.surface_type, si.features, si.rank_weight,
-               l.lemma, l.pos, l.gender,
+               l.lemma, l.pos, l.gender, l.lemma_class,
                COALESCE(fr.rank, 1000000000) AS freq_rank
         FROM search_index si JOIN lemmas l ON l.id = si.lemma_id
         LEFT JOIN frequency fr ON fr.lemma_id = si.lemma_id
@@ -346,7 +369,7 @@ def search(q: str = Query(..., min_length=1, max_length=120),
             for r in conn.execute(
                 f"""
                 SELECT si.lemma_id, si.surface, si.surface_type, si.features, si.rank_weight,
-                       l.lemma, l.pos, l.gender,
+                       l.lemma, l.pos, l.gender, l.lemma_class,
                        COALESCE(fr.rank, 1000000000) AS freq_rank
                 FROM search_index si JOIN lemmas l ON l.id = si.lemma_id
                 LEFT JOIN frequency fr ON fr.lemma_id = si.lemma_id
@@ -370,7 +393,7 @@ def search(q: str = Query(..., min_length=1, max_length=120),
             for r in conn.execute(
                 """
                 SELECT gi.lemma_id, gi.en_term, gi.rank_weight,
-                       l.lemma AS lemma, l.pos, l.gender,
+                       l.lemma AS lemma, l.pos, l.gender, l.lemma_class,
                        NULL AS surface, 'lemma' AS surface_type, NULL AS features,
                        COALESCE(fr.rank, 1000000000) AS freq_rank
                 FROM gloss_index gi JOIN lemmas l ON l.id = gi.lemma_id
@@ -393,10 +416,10 @@ def search(q: str = Query(..., min_length=1, max_length=120),
             (
                 q,
                 key,
-                1 if results else 0,
-                results[0]["lemma_id"] if results else None,
-                len(results),
-                results[0]["via"] if results else None,
+                1 if (results or name_results) else 0,
+                (results or name_results)[0]["lemma_id"] if (results or name_results) else None,
+                len(results) + len(name_results),
+                (results or name_results)[0]["via"] if (results or name_results) else None,
             ),
         )
         conn.commit()
@@ -404,7 +427,8 @@ def search(q: str = Query(..., min_length=1, max_length=120),
         pass
 
     conn.close()
-    return {"query": q, "normalized": key, "resolved": bool(results), "results": results}
+    return {"query": q, "normalized": key, "resolved": bool(results or name_results),
+            "results": results, "name_results": name_results}
 
 
 @app.get("/api/word/{lemma}")
@@ -1630,6 +1654,17 @@ def explore_compare(limit: int = Query(160, ge=1, le=500),
     _cache_put(conn, cache_key, result)
     conn.close()
     return result
+
+
+@app.get("/api/stats")
+def stats():
+    """Honest lexicon size. Proper names are ~76% of the rows, so the meaningful
+    figure is CONTENT lemmas (F37) — reported separately from the name namespace."""
+    conn = db()
+    total = conn.execute("SELECT COUNT(*) FROM lemmas").fetchone()[0]
+    names = conn.execute("SELECT COUNT(*) FROM lemmas WHERE lemma_class = 'name'").fetchone()[0]
+    conn.close()
+    return {"content_lemmas": total - names, "name_lemmas": names, "total_lemmas": total}
 
 
 @app.get("/api/build-status")

@@ -204,8 +204,35 @@ export default function SearchPage() {
           {data.results.map((r) => (
             <ResultCard key={`${r.lemma_id}-${r.matched_surface}`} result={r} />
           ))}
+          {data.name_results && data.name_results.length > 0 && (
+            <NameResults names={data.name_results} />
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+// Proper names matching the query, shown as a separate, de-emphasized group beneath the
+// real words (F37). They are still lemmas with word pages, so each links out; keeping
+// them out of the primary list is what stops surnames burying the word you meant.
+function NameResults({ names }: { names: SearchResponse["name_results"] }) {
+  return (
+    <section className="mt-1 rounded-lg border border-slate-200 bg-white/60 p-4 dark:border-slate-800 dark:bg-slate-900/40">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+        Κύρια ονόματα
+      </h3>
+      <div className="flex flex-wrap gap-1.5">
+        {names.map((n) => (
+          <Link
+            key={n.lemma_id}
+            to={`/word/${encodeURIComponent(n.lemma)}`}
+            className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-sm text-slate-600 transition hover:border-violet-300 hover:text-violet-700 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:border-violet-500/40 dark:hover:text-violet-300"
+          >
+            {n.lemma}
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
