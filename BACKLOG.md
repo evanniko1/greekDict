@@ -419,6 +419,20 @@ Not bugs to fix silently; these are scope and philosophy calls.
   this — they are exactly the containment a signal this noisy needs. Full reports:
   `data/analysis/drift_signal_{news,parliament}.json` (gitignored; regenerate with the
   harness).
+  - **REBUILD EVIDENCE (2026-07-22, wired pipeline, workers=6).** Ran the corrected
+    diachronic ingest on both axes. The change-point fix is confirmed AND it exposed the
+    residual corpus artifact:
+      - **Parliament** (uniform slices 10k–75k): 5,536 change-points / 6,472 drift rows
+        (85.5%), **spread** across 1999–2005 (~7–10% each). A uniform corpus yields
+        distributed change-points — the detector works.
+      - **News** (300k→1M size jump at 2019): 647 / 6,779 (9.5%), but **100% land on
+        2018/2019** — the size boundary, NOT the old 2016 gap. The Pettitt fix removed the
+        gap artifact (F5/F9 ✓) and revealed the deeper F38 problem: the news axis is two
+        differently-sized corpora, and the size discontinuity masquerades as a change point.
+    **Refined D3 verdict:** change-point is FIX+KEEP for **parliament**; for **news** it
+    must be DEMOTED to exploratory **or** the slices capped to equal size before it is
+    trustworthy (a corpus fix, not a code one). Drift/reliability-floor confirmed working:
+    16,583 (news) / 12,378 (parliament) rare-word neighbours suppressed (#51).
 - [?] **D4 — "Η ΤΝ εξηγεί· οι πηγές ορίζουν".** The repo contains no LLM; the "AI" is
   word2vec + logistic regression (F31, audit §3.9). Either build the grounded-explanation
   layer the principle promises, or change the user-facing copy.

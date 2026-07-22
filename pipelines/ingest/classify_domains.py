@@ -132,7 +132,7 @@ def classify_domains(
     from sklearn.metrics import accuracy_score, f1_score
     from sklearn.model_selection import train_test_split
 
-    sys.path.insert(0, os.path.join(HERE, "..", "analysis"))
+    sys.path.insert(0, os.path.join(ROOT, "pipelines", "analysis"))
     from calibration import (  # noqa: E402
         expected_calibration_error, tune_class_thresholds, decide_with_abstain,
         precision_coverage_report,
