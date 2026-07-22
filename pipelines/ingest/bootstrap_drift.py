@@ -103,10 +103,17 @@ def _resample_to_tempfile(lines: list[str], cap: int, tmp_dir: str) -> str:
 
 def _train_bootstrap(lines: list[str], cap: int, tmp_dir: str,
                      vector_size: int, window: int, min_count: int, epochs: int):
-    """One bootstrap model: resample → train → return wv. Temp file cleaned up."""
+    """One bootstrap model: resample → train → return wv. Temp file cleaned up.
+
+    Uses ALL cores (workers>1). The point-estimate pipeline defaults `_train` to workers=1
+    for bit-reproducibility (F44/F50), but a bootstrap replicate is a stochastic resample by
+    definition — training nondeterminism only adds to the variability we are already
+    sampling — so the reproducibility cost is pointless here and workers=1 would make the
+    K≥100 run take days instead of ~8-10 h."""
     path = _resample_to_tempfile(lines, cap, tmp_dir)
     try:
-        return _train(path, vector_size, window, min_count, epochs).wv
+        return _train(path, vector_size, window, min_count, epochs,
+                      workers=os.cpu_count() or 8).wv
     finally:
         try:
             os.remove(path)
