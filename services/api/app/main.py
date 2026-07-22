@@ -28,6 +28,9 @@ sys.path.insert(0, os.path.join(ROOT, "pipelines", "ingest"))
 from normalize_greek import normalize, greeklish_to_greek, greeklish_candidates  # noqa: E402
 import manifest as _manifest  # noqa: E402  (build provenance / divergence checks)
 
+sys.path.insert(0, os.path.join(ROOT, "pipelines", "analysis"))
+import estimators as _est  # noqa: E402  (corrected trend/keyness statistics, waves #45/#46)
+
 DB_PATH = os.environ.get("LEXORAMA_DB", os.path.join(ROOT, "data", "db", "lexorama.sqlite"))
 
 app = FastAPI(title="Λεξόραμα API", version="0.1.0")
@@ -1390,7 +1393,7 @@ def explore_trends(corpus: str = Query("parliament", max_length=32),
     # p → BH-FDR (was OLS slope t-test); bump to discard older cached shapes.
     # Quantize float components: each distinct key is a permanent row costing ~35 s to
     # build, so unrounded user floats are a cheap way to fill the table (audit F55).
-    cache_key = f"trends:v5:{corpus}:{limit}:{_q(min_avg_pm)}:{_q(min_r2)}"
+    cache_key = f"trends:v6:{corpus}:{limit}:{_q(min_avg_pm)}:{_q(min_r2)}"
     cached = _cache_get(conn, cache_key)
     if cached is not None:
         conn.close()
@@ -1455,8 +1458,10 @@ def explore_trends(corpus: str = Query("parliament", max_length=32),
         yrs = [y for y, _ in series]
         pms = [p for _, p in series]
         sen_by_id[lid] = _theil_sen_slope(yrs, pms) if len(yrs) >= 2 else 0.0
-        # min_n (≥5) already guarantees length; guard anyway so MK never sees a short series.
-        p_by_id[lid] = _mann_kendall_p(pms)[0] if len(yrs) >= 5 else 1.0
+        # Mann–Kendall with the Hamed–Rao autocorrelation correction (#45 / F10-F39):
+        # annual series are serially correlated, so the naive MK variance is understated
+        # and p anti-conservative. min_n (≥5) guarantees length; guard anyway.
+        p_by_id[lid] = _est.mann_kendall(pms).p_value if len(yrs) >= 5 else 1.0
     q_by_id, sig_by_id = _bh_fdr(p_by_id, alpha=0.05)
 
     def pack(r):
@@ -1507,7 +1512,7 @@ def explore_compare(limit: int = Query(160, ge=1, le=500),
     Fully deterministic → served from `explore_cache` when warm (≈35 s recompute
     only on the first call after a re-ingest changes the data signature)."""
     conn = db()
-    cache_key = f"compare:v2:{limit}:{min_count}:dp{_q(max_dp)}"  # v2: G²/Hardie LR keyness (#46)
+    cache_key = f"compare:v3:{limit}:{min_count}:dp{_q(max_dp)}"  # v3: G²/Hardie LR keyness + BH-FDR (#46)
     cached = _cache_get(conn, cache_key)
     if cached is not None:
         conn.close()
@@ -1614,30 +1619,39 @@ def explore_compare(limit: int = Query(160, ge=1, le=500),
         dev = sum(abs(counts.get(y, 0) / total - sy) for y, sy in s.items())
         return 0.5 * dev
 
-    parl_scored, news_scored = [], []
+    # Pass 1 — score every candidate. Effect size + significance separated (#46): Hardie
+    # Log Ratio (with CI) is the effect size; Dunning G² its significance.
+    cand: list[dict] = []
+    p_by_lid: dict[int, float] = {}
     kseen: set = set()
     for r in krows:
         if not _keep_mover(r["lemma"], r["normalized_lemma"]) or r["normalized_lemma"] in kseen:
             continue
         kseen.add(r["normalized_lemma"])
         pc, nc = r["pc"], r["nc"]
-        pm_p = pc / tp * 1e6
-        pm_n = nc / tn * 1e6
-        # Effect size + significance separated (#46): Hardie Log Ratio (with CI) is the
-        # effect size; Dunning G² is the significance. A word is distinctive only when
-        # the evidence is significant (G² ≥ 10.83 ↔ p<0.001), it leans to that corpus
-        # (sign of LR) and it's well-dispersed there (DP ≤ max_dp) — no arbitrary smoother.
         ratio, ci_lo, ci_hi = _hardie_log_ratio(pc, nc, tp, tn)
         g2 = _log_likelihood_g2(pc, nc, tp, tn)
         dp_p = _dp(r["lemma_id"], "parliament")
         dp_n = _dp(r["lemma_id"], "news")
-        entry = {"lemma": r["lemma"], "lemma_id": r["lemma_id"],
-                 "log_ratio": round(ratio, 3),
-                 "log_ratio_ci_lo": round(ci_lo, 3), "log_ratio_ci_hi": round(ci_hi, 3),
-                 "g2": round(g2, 1),
-                 "pm_parliament": round(pm_p, 2), "pm_news": round(pm_n, 2),
-                 "dp_parliament": round(dp_p, 3), "dp_news": round(dp_n, 3)}
-        if g2 < 10.83:  # not significant at p<0.001 → not distinctive of either corpus
+        p_by_lid[r["lemma_id"]] = _est.g2_p_value(g2)
+        cand.append({"lemma": r["lemma"], "lemma_id": r["lemma_id"],
+                     "log_ratio": round(ratio, 3),
+                     "log_ratio_ci_lo": round(ci_lo, 3), "log_ratio_ci_hi": round(ci_hi, 3),
+                     "g2": round(g2, 1),
+                     "pm_parliament": round(pc / tp * 1e6, 2), "pm_news": round(nc / tn * 1e6, 2),
+                     "dp_parliament": round(dp_p, 3), "dp_news": round(dp_n, 3),
+                     "_ratio": ratio, "_dp_p": dp_p, "_dp_n": dp_n})
+
+    # Pass 2 — Benjamini–Hochberg across ALL simultaneous G² tests (#46 / F20-F43): a word
+    # is distinctive only when its q clears 0.05 (not a raw uncorrected p<0.001 claim over
+    # thousands of tests), it leans to a corpus (sign of LR) and is well-dispersed (DP).
+    q_by_lid, sig_by_lid = _bh_fdr(p_by_lid, alpha=0.05)
+    parl_scored, news_scored = [], []
+    for entry in cand:
+        lid = entry["lemma_id"]
+        entry["q_value"] = round(q_by_lid.get(lid, 1.0), 4)
+        ratio, dp_p, dp_n = entry.pop("_ratio"), entry.pop("_dp_p"), entry.pop("_dp_n")
+        if not sig_by_lid.get(lid, False):
             continue
         if ratio > 0 and dp_p <= max_dp:
             parl_scored.append(entry)

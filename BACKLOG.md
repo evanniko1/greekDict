@@ -300,12 +300,21 @@ Carried over from `docs/backlog.md` (now folded in). These are *wanted*, not def
 
 ### Methodology waves #43–#51 — reconcile against the audit
 
-**Approach (post-D3):** the corrected estimators are landed OFFLINE as pure, tested
-functions in [`pipelines/analysis/estimators.py`](pipelines/analysis/estimators.py) and
-validated against a null in the harness FIRST; wiring them into `ingest_diachronic` /
-`main.py` and repopulating is a later step, gated behind the Tier B rebuild (D3). This is
-why "landed (offline)" below does not yet change any served number — the shipped DB still
-has `change_point_score`/`drift_score_boot` NULL until the rebuild runs the new code.
+**Approach (post-D3):** the corrected estimators were landed OFFLINE as pure, tested
+functions in [`pipelines/analysis/estimators.py`](pipelines/analysis/estimators.py) +
+[`embedding_ops.py`](pipelines/analysis/embedding_ops.py) +
+[`calibration.py`](pipelines/analysis/calibration.py), validated against a null in the
+harness FIRST.
+
+**WIRING COMPLETE (2026-07-22, branch `wire-rebuild`).** All waves are now wired into the
+live pipeline — `ingest_diachronic` (train sg=1/workers=1/seed, Hamilton `_align`, Pettitt
+change-point, balanced pooling, reliability floor), `bootstrap_drift` (bias-corrected
+interval), `main.py` (Hamed-Rao trends, BH-FDR keyness), `classify_domains` (isotonic +
+abstain). Read-side waves (#45/#46) go live on the next cache miss. The rest materialises
+on the **corrected Tier B rebuild** — an ~8–10 h maintainer job, documented in
+[`docs/REBUILD.md`](docs/REBUILD.md). Until that runs, the shipped DB still shows the old
+artefacts (`change_point_score`/`drift_score_boot` NULL); `manifest.py` will move toward
+green once it lands.
 
 - [x] **#43 — BCa interval landed (offline).** `estimators.bca_interval` (bias-correction
   + acceleration, Efron 1987); coverage unit-tested at ≥0.88 vs the K=12 percentile's ~0.82
