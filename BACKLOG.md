@@ -329,14 +329,32 @@ has `change_point_score`/`drift_score_boot` NULL until the rebuild runs the new 
   raw p<0.001 claim (F20/F43).
 - [ ] **#47** Platt/isotonic calibration + abstain option + per-field precision.
   <sub>F16, F17, F45.</sub>
-- [ ] **#48** Anchored Procrustes on stable high-frequency words only.
-  <sub>F14: current anchor pruning selects on vector norm (corr 0.996), not stability.</sub>
-- [ ] **#49** Adaptive pooling window / report sensitivity.
-  <sub>F15: ±2-year pooling is weighted by raw line count, so the slice labelled 2018 is
-  69% 2019–2020 text.</sub>
-- [ ] **#50** Average displayed point estimates over seeds.
-  <sub>F44: `workers=cpu_count()` with no seed makes no diachronic result reproducible.</sub>
-- [ ] **#51** Per-era frequency floor for era-neighbour lists.
+- [x] **#48 — Hamilton-compliant alignment landed (offline).**
+  [`embedding_ops.procrustes_align`](pipelines/analysis/embedding_ops.py) L2-normalizes
+  before Procrustes and prunes anchors by a SCALE-FREE cosine residual, not the Euclidean
+  `‖A·R−B‖` that scales with norm (F14). Reproduced the audit sim: corr(residual, norm)
+  **0.991 → 0.019** (shipped Euclidean → fixed cosine), so pruning drops drifted anchors,
+  not high-frequency ones. Unit-tested (rotation recovery, norm-invariance, kept-anchor
+  norm distribution). **Remaining:** wire into `ingest_diachronic._align`; also switch
+  `_train` `sg=0`→`sg=1` (Hamilton uses SGNS; the classifier already does — F14 aside).
+- [x] **#49 — balanced pooling landed (offline).**
+  `embedding_ops.balanced_pool_budget` draws EQUAL lines per member year so the label is
+  the content centroid, not dragged toward a larger-corpus neighbour (F15: the raw-count
+  pool made the "2018" slice 69% 2019–2020 text, centroid 2018.72 — unit-tested).
+  `size_weighted_mean_year` records the centroid; `member_sets_identical` refuses to emit
+  two slices from one population (news 2011/2013). **Remaining:** wire into
+  `_pooled_to_tempfile`; apply the cap identically across corpora.
+- [x] **#50 — determinism resolved (evidenced).** D3 harness showed `workers=1` gives
+  exactly 0.0 drift; `workers=16`+seed manufactures ~0.0024. **Remaining:** set
+  `_train(workers=1, seed=…)` in the rebuild — a one-line config change, not new code.
+- [x] **#51 — per-era reliability floor landed + calibrated (offline).**
+  `embedding_ops.is_reliable(count, floor)` gates neighbour lists / drift; unit-tested.
+  [`validate_reliability_floor.py`](pipelines/analysis/validate_reliability_floor.py)
+  measured the floor empirically on real news models — SNR by count band: 5–20 → **1.45**,
+  20–50 → 1.75, 50–100 → **2.13**, 100–300 → 2.32. Noise drops with frequency (0.071→0.037)
+  exactly as predicted. **Floor: count ≥20 for drift; the existing `neighbor_min_count=50`
+  (SNR 2.1) is confirmed safely conservative.** **Remaining:** apply the gate when
+  repopulating `semantic_neighbors`/`diachronic_drift`.
 
 ---
 
