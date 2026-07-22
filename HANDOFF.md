@@ -48,6 +48,12 @@ verified end-to-end on real data:
   and gives false negatives.
 - Serve command (verified):
   `python -m uvicorn services.api.app.main:app --port 8011`
+- **The two dev servers bind different IP stacks.** uvicorn binds IPv4, Vite binds IPv6
+  only — so the API answers on `http://127.0.0.1:8011` but NOT on `localhost` if that
+  resolves to `::1`, while the web app answers on `http://localhost:5180` and
+  `http://[::1]:5180` but NOT on `127.0.0.1:5180`. A curl health check against the wrong
+  one returns 000 and looks like a dead server. Browsers use `localhost`, so both work
+  there; only scripted checks trip on it.
 
 ## Done this session (2026-05-31)
 - **Form-of ranking quirk FIXED.** `ingest_kaikki.is_form_of_entry()` skips

@@ -98,11 +98,19 @@ const GLOSSARY: { group: string; terms: Term[] }[] = [
 
 const PRINCIPLES: { title: string; body: string }[] = [
   {
-    title: "Η ΤΝ εξηγεί· οι πηγές ορίζουν",
+    // The page used to claim, in the present tense, that AI explains and organises the
+    // data. There is no language model anywhere in this product — the only computed
+    // additions are a logistic-regression domain classifier and the rule-based paradigm
+    // engine, both of which are marked wherever they appear. Claiming otherwise was the
+    // single least defensible sentence on the site (audit F31, §3.9).
+    title: "Οι πηγές ορίζουν",
     body:
-      "Κάθε ορισμός, τύπος και σχέση κρατά την πηγή του (badge «Πηγή»). Η τεχνητή " +
-      "νοημοσύνη χρησιμοποιείται για να εξηγήσει και να οργανώσει — ποτέ για να " +
-      "εφεύρει σημασίες. Ό,τι βλέπεις προέρχεται από ανοιχτά, παραπεμπόμενα δεδομένα.",
+      "Κάθε ορισμός, τύπος και σχέση κρατά την πηγή του (badge «Πηγή»). Καμία σημασία " +
+      "δεν παράγεται αυτόματα: το Λεξόραμα δεν χρησιμοποιεί γλωσσικό μοντέλο που γράφει " +
+      "ορισμούς. Οι μόνες υπολογισμένες προσθήκες είναι στατιστικές — η πρόβλεψη " +
+      "θεματικού πεδίου (~) και οι αλγοριθμικά παραγόμενοι τύποι κλίσης (*) — και " +
+      "σημειώνονται πάντα ως τέτοιες. Ό,τι άλλο βλέπεις προέρχεται από ανοιχτά, " +
+      "παραπεμπόμενα δεδομένα.",
   },
   {
     title: "Επίλυση τύπου → λήμμα που εξηγείται",
@@ -141,7 +149,7 @@ export default function AboutPage() {
       <Link to="/" className="text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100">
         ← Αναζήτηση
       </Link>
-      <h1 className="mt-2 text-2xl font-bold tracking-tight">Γλωσσάρι & σχεδιαστική λογική</h1>
+      <h1 className="mt-2 font-display text-3xl">Γλωσσάρι & σχεδιαστική λογική</h1>
       <p className="text-sm text-slate-600 dark:text-slate-400">
         Τι σημαίνουν οι όροι που βλέπεις στις σελίδες λέξεων — και γιατί το Λεξόραμα
         είναι φτιαγμένο έτσι.

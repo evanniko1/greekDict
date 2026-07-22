@@ -34,6 +34,19 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "pipelines", "ingest"))
 from ingest_kaikki import init_db, record_attribution  # noqa: E402
 from normalize_greek import normalize  # noqa: E402
+import manifest  # noqa: E402
+
+
+# No real lemma owns this share of a corpus. Anything above it is a symptom of a
+# lemma owning a surface it should not (bare endings, punctuation) — audit F4, where
+# αισώπειος held 0.81% of the parliament corpus via the bare endings ο/ος/ων.
+# The most frequent genuine Greek word (the article) sits near 3-4%, so 0.5% is a
+# loose guard that only fires on artifacts of the ingest bug, not on real vocabulary.
+MAX_LEMMA_SHARE = 0.005
+
+# The Zipf scale (van Heuven et al. 2014) is log10(count per billion); real corpora
+# top out near 7. Anything above this means the counts are inflated.
+ZIPF_CEILING = 7.5
 
 
 def zipf_band(zipf: float) -> str:
@@ -80,12 +93,18 @@ def ingest_frequency(freq_file: str, db_path: str, source: str) -> dict:
         conn.close()
         sys.exit(f"No usable frequency rows in {freq_file}.")
 
-    # Map a normalized surface -> the lemma_id(s) it can resolve to. A surface may
-    # belong to several lemmas (homographs); we credit each, so a lemma's count is
-    # an upper bound that sums every form attributable to it.
-    surface_to_lemmas: dict[str, list[int]] = {}
+    # Map a normalized surface -> the DISTINCT lemma_id(s) it can resolve to.
+    #
+    # This must be a set, not a list (audit F2). search_index holds one row per
+    # (surface, lemma, match kind), so a lemma commonly appears several times for the
+    # same surface; crediting per-ROW rather than per-LEMMA added 907,217,101 tokens of
+    # pure duplication (33.6% of everything credited) and pushed the total to 1,026% of
+    # the corpus, with MAX(zipf)=8.615 — off the scale van Heuven et al. (2014) define.
+    # Inflation was word-dependent (median 1.29x, max 21.09x), so it distorted band
+    # assignment and the frequency rank that orders search results.
+    surface_to_lemmas: dict[str, set[int]] = {}
     for norm, lemma_id in conn.execute("SELECT normalized_surface, lemma_id FROM search_index"):
-        surface_to_lemmas.setdefault(norm, []).append(lemma_id)
+        surface_to_lemmas.setdefault(norm, set()).add(lemma_id)
 
     lemma_count: dict[int, int] = {}
     matched_surfaces = 0
@@ -94,8 +113,23 @@ def ingest_frequency(freq_file: str, db_path: str, source: str) -> dict:
         if not ids:
             continue
         matched_surfaces += 1
+        # A genuinely ambiguous surface still credits each candidate lemma in full:
+        # the count is an upper bound per lemma, which is why `frequency` is documented
+        # as attributable-token count and not a disambiguated corpus frequency.
         for lid in ids:
             lemma_count[lid] = lemma_count.get(lid, 0) + count
+
+    # Plausibility guard (F4). No single lemma accounts for a large share of a corpus;
+    # when one appears to, it is owning a surface it should never have had (bare
+    # endings, punctuation). Drop and report rather than publish an absurd Zipf.
+    cap = MAX_LEMMA_SHARE * total
+    implausible = {lid: c for lid, c in lemma_count.items() if c > cap}
+    for lid in implausible:
+        del lemma_count[lid]
+    if implausible:
+        print(f"  dropped {len(implausible)} lemma(s) exceeding {MAX_LEMMA_SHARE:.1%} "
+              f"of the corpus (implausible surface ownership): "
+              f"{sorted(implausible.values(), reverse=True)[:5]}", file=sys.stderr)
 
     # Dense rank by count desc (1 = most frequent), then persist Zipf + band.
     ranked = sorted(lemma_count.items(), key=lambda kv: kv[1], reverse=True)
@@ -137,7 +171,13 @@ def main() -> None:
 
     print(f"Frequency pass: {args.freq_file} as {args.source} -> {args.db}", file=sys.stderr)
     import json
-    print(json.dumps(ingest_frequency(args.freq_file, args.db, args.source), indent=2, ensure_ascii=False))
+    import sqlite3 as _sq
+    stats = ingest_frequency(args.freq_file, args.db, args.source)
+    _c = _sq.connect(args.db)
+    manifest.record_build(_c, "ingest_frequency", inputs=[args.freq_file],
+                          params={"source": args.source}, tables=["frequency"])
+    _c.close()
+    print(json.dumps(stats, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

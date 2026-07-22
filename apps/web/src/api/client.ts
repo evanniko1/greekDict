@@ -2,6 +2,7 @@
 // to the backend on :8011 in dev (see vite.config.ts).
 import type {
   AttributionsResponse,
+  BuildStatusResponse,
   ByFieldResponse,
   CompareResponse,
   DiachronicResponse,
@@ -25,6 +26,10 @@ async function getJSON<T>(path: string): Promise<T> {
 
 export function health(): Promise<HealthResponse> {
   return getJSON<HealthResponse>("/api/health");
+}
+
+export function buildStatus(): Promise<BuildStatusResponse> {
+  return getJSON<BuildStatusResponse>("/api/build-status");
 }
 
 export function search(q: string, limit = 10): Promise<SearchResponse> {

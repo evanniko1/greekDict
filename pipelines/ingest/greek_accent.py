@@ -22,6 +22,8 @@ Pure, total, dependency-free. Validated in tests against real Wiktionary forms.
 
 from __future__ import annotations
 
+import unicodedata
+
 __all__ = [
     "syllables", "stress_pos", "set_stress", "strip_tonos", "ACCENTED",
     "n_syllables", "stress_index_from_start", "set_stress_from_start",
@@ -33,6 +35,27 @@ _ADD = {"α": "ά", "ε": "έ", "η": "ή", "ι": "ί", "ο": "ό", "υ": "ύ", 
         "ϊ": "ΐ", "ϋ": "ΰ"}
 _DROP = {v: k for k, v in _ADD.items()}
 ACCENTED = frozenset(_DROP)
+
+# Combining stress marks, tested against NFD-decomposed text. The composed table
+# above is lowercase-monotonic only, so it is blind to capitals (Ίκαρος) and to every
+# polytonic vowel that arrives via etymology — those read as "unaccented", and the
+# caller then wrote a SECOND accent onto syllable 1, producing impossible strings
+# like ἔναύλος and μούστακᾶτος (audit F40). Detection must be total.
+_ACUTE, _PERISPOMENI, _VARIA = "́", "͂", "̀"
+_STRESS_MARKS = frozenset({_ACUTE, _PERISPOMENI, _VARIA})
+# psili, dasia, perispomeni, varia, ypogegrammeni — none occur in monotonic Greek.
+_POLYTONIC_MARKS = frozenset({"̓", "̔", "͂", "̀", "ͅ"})
+
+
+def has_stress_mark(text: str) -> bool:
+    """True if `text` carries any stress diacritic, in any case or orthography."""
+    return any(ch in _STRESS_MARKS for ch in unicodedata.normalize("NFD", text))
+
+
+def is_polytonic(text: str) -> bool:
+    """True if `text` uses polytonic orthography (breathings, circumflex, iota
+    subscript). Modern Greek paradigms do not apply to such lemmas."""
+    return any(ch in _POLYTONIC_MARKS for ch in unicodedata.normalize("NFD", text))
 
 _PLAIN_VOWELS = set("αεηιουω") | {"ϊ", "ϋ"}
 _VOWELS = _PLAIN_VOWELS | ACCENTED
@@ -121,9 +144,14 @@ def n_syllables(word: str) -> int:
 
 
 def stress_index_from_start(word: str) -> int:
-    """0-based index (from the start) of the accented nucleus, or -1 if none."""
+    """0-based index (from the start) of the accented nucleus, or -1 if none.
+
+    Uses NFD combining marks rather than the composed lowercase table, so capital
+    and polytonic accents are seen (F40). -1 now genuinely means "unaccented",
+    which callers must treat as a refusal rather than a default.
+    """
     for idx, (s, e) in enumerate(_nuclei(word)):
-        if any(ch in ACCENTED for ch in word[s:e]):
+        if has_stress_mark(word[s:e]):
             return idx
     return -1
 

@@ -30,7 +30,7 @@ export default function LicensingPage() {
       <Link to="/" className="text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100">
         ← Αναζήτηση
       </Link>
-      <h1 className="text-2xl font-bold">Πηγές &amp; άδειες</h1>
+      <h1 className="font-display text-3xl">Πηγές &amp; άδειες</h1>
 
       <p className="text-sm text-slate-600 dark:text-slate-400">
         Το Λεξόραμα αντλεί τα λεξικογραφικά του δεδομένα από το Βικιλεξικό

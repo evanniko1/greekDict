@@ -26,6 +26,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from normalize_greek import normalize  # noqa: E402
+import manifest  # noqa: E402
 
 HERE = os.path.dirname(__file__)
 SCHEMA = os.path.join(HERE, "schema.sql")
@@ -89,31 +90,31 @@ SOURCE_META: dict[str, dict[str, str]] = {
     },
     "leipzig-coocc": {
         "source_url": "https://wortschatz.uni-leipzig.de/en/download/Modern%20Greek",
-        "license": "CC BY 4.0",
+        "license": "CC BY-NC 4.0",
         "attribution_text": (
             "Δεδομένα συνεμφάνισης λέξεων (συνάψεις) από τα Corpora Collection "
             "του Wortschatz Leipzig (Πανεπιστήμιο της Λειψίας), διαθέσιμα υπό την "
-            "άδεια CC BY 4.0. Οι συνάψεις έχουν αντιστοιχιστεί σε λήμματα και "
+            "άδεια CC BY-NC 4.0. Οι συνάψεις έχουν αντιστοιχιστεί σε λήμματα και "
             "ταξινομηθεί κατά ισχύ συσχέτισης (log-likelihood)."
         ),
     },
     "leipzig-examples": {
         "source_url": "https://wortschatz.uni-leipzig.de/en/download/Modern%20Greek",
-        "license": "CC BY 4.0",
+        "license": "CC BY-NC 4.0",
         "attribution_text": (
             "Παραδείγματα χρήσης (αυθεντικές προτάσεις) από τα Corpora Collection "
             "του Wortschatz Leipzig (Πανεπιστήμιο της Λειψίας) — σώμα ειδησεογραφικού "
-            "λόγου, διαθέσιμα υπό την άδεια CC BY 4.0. Κάθε πρόταση έχει αντιστοιχιστεί "
+            "λόγου, διαθέσιμα υπό την άδεια CC BY-NC 4.0. Κάθε πρόταση έχει αντιστοιχιστεί "
             "σε λήμματα μέσω των τύπων της και επιλεγεί με κριτήρια αναγνωσιμότητας."
         ),
     },
     "leipzig-embeddings": {
         "source_url": "https://wortschatz.uni-leipzig.de/en/download/Modern%20Greek",
-        "license": "CC BY 4.0",
+        "license": "CC BY-NC 4.0",
         "attribution_text": (
             "Σημασιολογικοί γείτονες από μοντέλο διανυσματικών αναπαραστάσεων λέξεων "
             "(word2vec) εκπαιδευμένο στο σώμα κειμένων Wortschatz Leipzig (Πανεπιστήμιο "
-            "της Λειψίας), διαθέσιμο υπό την άδεια CC BY 4.0. Οι γείτονες υπολογίζονται "
+            "της Λειψίας), διαθέσιμο υπό την άδεια CC BY-NC 4.0. Οι γείτονες υπολογίζονται "
             "ως οι λέξεις με τα πλησιέστερα διανύσματα (ομοιότητα συνημιτόνου) και έχουν "
             "αντιστοιχιστεί σε λήμματα."
         ),
@@ -146,11 +147,131 @@ def record_attribution(conn: sqlite3.Connection, source: str) -> None:
     )
 
 
+_GREEK = re.compile(r"[Ͱ-Ͽἀ-῿]")
+# Template/markup debris that leaks out of Wiktionary inflection tables.
+_FORM_JUNK = set("{}[]|_<>\\/*=")
+# Guillemets and quote characters: Leipzig counts these as tokens, so a lemma that
+# "owns" one absorbs hundreds of thousands of corpus tokens (audit F1).
+_FORM_PUNCT = set("«»\"'“”‘’()،,.;:!?·—–-")
+
+
+def is_admissible_form(ftext: str, lemma: str) -> bool:
+    """Reject Wiktionary "forms" that are not actually inflected words (F1, F4).
+
+    Nothing in the dump guarantees a `forms[].form` is a word. Punctuation, bare
+    inflectional endings and the component tokens of multiword idioms all appear, and
+    once stored they become searchable surfaces that absorb corpus tokens — the
+    guillemets « » made περιπλέκω the 4th most "news-distinctive" word in Greek, and the
+    bare endings ο/ος/ων made αισώπειος the #1 falling word (0.81% of the corpus).
+
+    The rules are deliberately conservative: each rejects a class that cannot be a
+    legitimate inflected form of `lemma`.
+    """
+    if not ftext:
+        return False
+    f = ftext.strip()
+    if not f or f == "-" or f == lemma:
+        return False
+    # 1. Must contain at least one Greek letter. Drops punctuation-only surfaces,
+    #    bare Latin glosses ('arse and pants') and romanizations stored as forms.
+    if not _GREEK.search(f):
+        return False
+    # 2. Template debris.
+    if any(ch in _FORM_JUNK for ch in f):
+        return False
+    # 3. Punctuation-only once Greek is stripped is covered by (1); this catches a
+    #    form that is a real word glued to a quote mark.
+    if any(ch in _FORM_PUNCT for ch in f):
+        return False
+    # 4. Bare inflectional endings. A long lemma cannot have a 1-3 character inflected
+    #    form; requiring a gap of >=2 keeps genuinely short paradigms (έχω/είχα) intact.
+    if len(f) <= 3 and (len(lemma) - len(f)) >= 2:
+        return False
+    # 5. Components of a multiword lemma. «με σκοπό να» must not own «με», «σκοπό», «να».
+    if " " in lemma and " " not in f:
+        return False
+    return True
+
+
+# Mediopassive (παθητική) markers for Modern Greek verbs. el-wiktionary omits the voice
+# tag on 99% of verb forms, so active and mediopassive collapse into one grid cell for
+# 33.9% of verbs (audit F3). Voice is the primary axis of the Greek verb, so it is
+# recovered here from the form itself rather than left to the front end to guess.
+_MP_FINITE = ("ομαι", "όμαι", "εσαι", "έσαι", "εται", "έται", "όμαστε", "ομαστε",
+              "όσαστε", "εστε", "έστε", "ονται", "ούνται", "ούμαι", "άμαι",
+              "όμουν", "όσουν", "όταν", "όμασταν", "όσασταν", "ονταν", "όντουσαν",
+              # Colloquial imperfect variants carrying a final -α/-ε. Without these the
+              # suffix test misses σκοτωνόμουνα/απτόσουνα/αβγοκοβότανε and the form is
+              # tagged active, landing a mediopassive in the Ενεργητική grid.
+              "όμουνα", "όσουνα", "ότανε", "όμασταν", "όντανε",
+              # B-conjugation (contract) mediopassive: αγαπιέμαι, θυμιέσαι.
+              "ιέμαι", "ιέσαι", "ιέται", "ιόμαστε", "ιέστε", "ιούνται",
+              "ιόμουν", "ιόσουν", "ιόταν", "ιόμουνα", "ιόσουνα", "ιότανε")
+_MP_AORIST = ("θηκα", "τηκα", "στηκα", "χτηκα", "φτηκα", "θήκαμε", "τήκαμε",
+              "στήκαμε", "θηκες", "θηκε", "θήκατε", "θηκαν", "χτηκε", "φτηκε")
+_MP_NONFINITE = ("θεί", "τεί", "στεί", "χτεί", "φτεί", "θούμε", "θούν",
+                 "μένος", "μένη", "μένο")
+
+
+def infer_voice(ftext: str, tags: list[str], pos: str) -> str | None:
+    """Return 'passive' | 'active' | None for an untagged Greek verb form (F3).
+
+    Returns None when the voice is already tagged, when the entry is not a verb, or
+    when the form gives no morphological evidence — inventing a tag would be worse
+    than leaving the cell untagged.
+    """
+    if pos != "verb":
+        return None
+    lowered = [t.lower() for t in tags]
+    if "active" in lowered or "passive" in lowered or "middle" in lowered:
+        return None
+    if not ftext:
+        return None
+    # Periphrastic forms (έχω σκοτωθεί, θα σκοτωθώ): the lexical verb carries the voice.
+    token = ftext.strip().split()[-1] if " " in ftext.strip() else ftext.strip()
+    if not _GREEK.search(token):
+        return None
+    if token.endswith(_MP_AORIST) or token.endswith(_MP_FINITE) or token.endswith(_MP_NONFINITE):
+        return "passive"
+    # Only claim 'active' for recognisable active endings; silence otherwise.
+    if token.endswith(("ω", "εις", "ει", "ουμε", "ετε", "ουν", "α", "ες", "ε",
+                       "αμε", "ατε", "αν", "σω", "σεις", "σει", "ας", "ώ", "άς",
+                       "εί", "ούμε", "είτε", "ούν")):
+        return "active"
+    return None
+
+
+def find_lemma_id(conn: sqlite3.Connection, word: str, pos: str) -> int | None:
+    """Resolve a dump entry to an existing lemma row, refusing to guess.
+
+    Lemma identity is (lemma, pos) — the ACCENTED surface (R2 / audit F21). Matching
+    on the accent-folded key alone would attach data to whichever homograph happened
+    to be inserted first (νόμος "law" vs νομός "prefecture"). We therefore try the
+    exact surface first, and fall back to the folded key only when it is unambiguous;
+    an ambiguous fold returns None so the caller counts it unmatched rather than
+    silently corrupting the wrong word.
+    """
+    row = conn.execute(
+        "SELECT id FROM lemmas WHERE lemma = ? AND pos IS ?", (word, pos)
+    ).fetchone()
+    if row:
+        return row[0]
+    rows = conn.execute(
+        "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
+        (normalize(word), pos),
+    ).fetchall()
+    return rows[0][0] if len(rows) == 1 else None
+
+
 def upsert_lemma(conn: sqlite3.Connection, lemma: str, pos: str, gender: str, source: str) -> int:
     norm = normalize(lemma)
+    # Identity is the ACCENTED surface + pos. Accent is phonemic in Greek, so folding
+    # it into the primary key silently destroyed distinct words — ποτέ "never",
+    # νομός "prefecture", δουλεία "slavery", χαλί "carpet" all had 0 rows (audit F21).
+    # normalized_lemma remains the SEARCH key; it is not the identity key.
     cur = conn.execute(
-        "SELECT id, sources FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-        (norm, pos),
+        "SELECT id, sources FROM lemmas WHERE lemma = ? AND pos IS ?",
+        (lemma, pos),
     )
     row = cur.fetchone()
     if row:
@@ -656,7 +777,8 @@ def ingest(input_path: str, source: str, db_path: str, limit: int | None) -> dic
     record_attribution(conn, source)
     stats = {"lines": 0, "lemmas": 0, "senses": 0, "forms": 0, "relations": 0,
              "etymology": 0, "etymons": 0,
-             "relations_resolved": 0, "skipped": 0, "form_of_skipped": 0}
+             "relations_resolved": 0, "skipped": 0, "form_of_skipped": 0,
+             "forms_rejected": 0, "voice_inferred": 0}
     with open(input_path, "r", encoding="utf-8") as fh:
         for line in fh:
             if limit is not None and stats["lines"] >= limit:
@@ -706,11 +828,19 @@ def ingest(input_path: str, source: str, db_path: str, limit: int | None) -> dic
             seen_forms: set[str] = set()
             for form in entry.get("forms", []):
                 ftext = form.get("form")
-                if not ftext or ftext in ("-", word):
-                    continue
                 tags = form.get("tags") or []
                 if "table-tags" in tags or "inflection-template" in tags:
                     continue
+                # Admissibility gate (F1/F4): a "form" that is punctuation, template
+                # debris, a bare ending or a component of a multiword lemma becomes a
+                # searchable surface that absorbs corpus tokens.
+                if not is_admissible_form(ftext, word):
+                    stats["forms_rejected"] += 1
+                    continue
+                voice = infer_voice(ftext, tags, pos)
+                if voice:
+                    tags = list(tags) + [voice]
+                    stats["voice_inferred"] += 1
                 key = (ftext, tuple(tags))
                 if key in seen_forms:
                     continue
@@ -775,15 +905,12 @@ def ingest_etymology_only(input_path: str, source: str, db_path: str, limit: int
             ety_text, etymons = extract_etymology(entry)
             if not ety_text and not etymons:
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
-            added = store_etymology(conn, row[0], ety_text, etymons, source)
+            added = store_etymology(conn, lemma_id, ety_text, etymons, source)
             if ety_text:
                 stats["etymology"] += 1
             stats["etymons"] += added
@@ -824,15 +951,12 @@ def ingest_pronunciation_only(input_path: str, source: str, db_path: str, limit:
             ipas = extract_pronunciations(entry)
             if not ipas:
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
-            added = store_pronunciations(conn, row[0], ipas, source)
+            added = store_pronunciations(conn, lemma_id, ipas, source)
             if added:
                 stats["lemmas"] += 1
             stats["ipas"] += added
@@ -874,15 +998,12 @@ def ingest_descendants_only(input_path: str, source: str, db_path: str, limit: i
             descs = extract_descendants(entry)
             if not descs:
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
-            added = store_descendants(conn, row[0], descs, source)
+            added = store_descendants(conn, lemma_id, descs, source)
             if added:
                 stats["lemmas"] += 1
             stats["descendants"] += added
@@ -921,11 +1042,8 @@ def ingest_sense_tags_only(input_path: str, source: str, db_path: str, limit: in
             if not word or entry.get("lang_code") not in (None, "el") or is_form_of_entry(entry):
                 stats["skipped"] += 1
                 continue
-            row = conn.execute(
-                "SELECT id FROM lemmas WHERE normalized_lemma = ? AND pos IS ?",
-                (normalize(word), entry.get("pos")),
-            ).fetchone()
-            if not row:
+            lemma_id = find_lemma_id(conn, word, entry.get("pos"))
+            if lemma_id is None:
                 stats["unmatched"] += 1
                 continue
             stats["matched"] += 1
@@ -935,7 +1053,7 @@ def ingest_sense_tags_only(input_path: str, source: str, db_path: str, limit: in
                     continue
                 cur = conn.execute(
                     "UPDATE senses SET tags = ? WHERE lemma_id = ? AND sense_index = ? AND source = ?",
-                    (json.dumps(sense_tags(sense), ensure_ascii=False), row[0], i, source),
+                    (json.dumps(sense_tags(sense), ensure_ascii=False), lemma_id, i, source),
                 )
                 stats["senses_updated"] += cur.rowcount
             if stats["lines"] % 50000 == 0:
@@ -980,6 +1098,19 @@ def main() -> None:
     else:
         print(f"Ingesting {args.input} as {args.source} -> {args.db}", file=sys.stderr)
         stats = ingest(args.input, args.source, args.db, args.limit)
+
+    # Record what produced this data, so a later reader can tell whether the DB
+    # matches the code (audit F18/F60/F63 — see pipelines/ingest/manifest.py).
+    mode = next((m for m in ("etymology_only", "ipa_only", "descendants_only",
+                             "sense_tags_only") if getattr(args, m)), "full")
+    _conn = sqlite3.connect(args.db)
+    manifest.record_build(
+        _conn, "ingest_kaikki", version=f"{args.source}:{mode}",
+        inputs=[args.input],
+        params={"source": args.source, "mode": mode, "limit": args.limit},
+        tables=["lemmas", "senses", "forms", "relations"],
+    )
+    _conn.close()
     print(json.dumps(stats, indent=2))
 
 

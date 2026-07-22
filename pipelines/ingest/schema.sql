@@ -1,6 +1,17 @@
--- Λεξόραμα lexical store (M0/M1). SQLite; portable to Postgres later.
--- A lemma is unique per (normalized_lemma, pos). el + en Wiktionary entries for
--- the same word merge onto one lemma row; their senses/forms keep their source.
+-- Λεξόραμα lexical store. SQLite; portable to Postgres later.
+--
+-- A lemma is unique per (lemma, pos) — the ACCENTED surface. el + en Wiktionary
+-- entries for the same word still merge onto one row (they spell it identically);
+-- their senses/forms keep their source.
+--
+-- schema_version 2 (R2 / audit F21): the identity key WAS (normalized_lemma, pos),
+-- which folded accents. Accent is phonemic in Greek, so that key silently destroyed
+-- distinct words — the second homograph to arrive was dropped: ποτέ "never",
+-- νομός "prefecture", δουλεία "slavery", χαλί "carpet", κάλος all had 0 rows.
+-- normalized_lemma remains the SEARCH key (search_index), never the identity key;
+-- disambiguation between homographs now happens at ranking, as the invariant intends.
+-- A DB built under version 1 cannot be migrated in place — the merged rows are gone
+-- and only a re-ingest recovers them. manifest.py flags such a DB.
 
 PRAGMA journal_mode = WAL;
 
@@ -12,7 +23,7 @@ CREATE TABLE IF NOT EXISTS lemmas (
     gender           TEXT,
     language         TEXT DEFAULT 'el',
     sources          TEXT,                   -- comma list: "el-wiktionary,en-wiktionary"
-    UNIQUE (normalized_lemma, pos)
+    UNIQUE (lemma, pos)
 );
 CREATE INDEX IF NOT EXISTS idx_lemmas_norm ON lemmas (normalized_lemma);
 
@@ -313,3 +324,26 @@ CREATE TABLE IF NOT EXISTS source_attributions (
     attribution_text TEXT,
     retrieved_at     TEXT
 );
+
+-- Build provenance (R1 / audit F18, F60, F63). schema_meta carries the schema
+-- version stamp; build_manifest records what produced the data in this file.
+-- Written by pipelines/ingest/manifest.py — see that module for the checks that
+-- detect a DB which the current code could not have produced.
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS build_manifest (
+    id                INTEGER PRIMARY KEY,
+    component         TEXT NOT NULL,       -- e.g. 'ingest_kaikki'
+    component_version TEXT,
+    code_commit       TEXT,                -- git HEAD at run time
+    code_dirty        INTEGER,             -- 1 if the tree had uncommitted changes
+    run_at            TEXT NOT NULL,       -- ISO-8601 UTC
+    inputs            TEXT,                -- json: [{path, bytes, mtime, fingerprint}]
+    params            TEXT,                -- json: the run's knobs
+    row_counts        TEXT                 -- json: {table: count} after the run
+);
+CREATE INDEX IF NOT EXISTS idx_build_manifest_component
+    ON build_manifest (component, run_at);
