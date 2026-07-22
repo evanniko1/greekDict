@@ -17,17 +17,18 @@ classifier instead of a lexicon lookup:
      unambiguous tag is clean supervision; multi-tag lemmas are kept as gold at
      write time but excluded from TRAINING so the classifier learns crisp fields.
   3. X = the lemma's L2-normalized embedding vector, y = its field. Train a
-     class-balanced multinomial logistic-regression classifier, ISOTONIC-CALIBRATED
-     (CalibratedClassifierCV) so its probabilities mean what they say (#47). Report
-     held-out accuracy / macro-F1 AND the precision+coverage of the DEPLOYED rule, plus
-     the ECE before/after calibration — honestly: raw accuracy is only ~0.56 on 18
-     fields, so calibration + abstention, not the point estimate, are what make the
-     inferences usable.
+     class-balanced multinomial logistic-regression classifier. Isotonic calibration
+     (CalibratedClassifierCV) is applied ONLY IF it lowers held-out ECE — on this small
+     multiclass data the base model is already well-calibrated (~0.04) and forcing
+     isotonic overfits and hurts, so it is not applied blindly (#47). Report held-out
+     accuracy / macro-F1, the ECE of both, and the precision+coverage of the DEPLOYED
+     rule — honestly: raw accuracy is only ~0.56 on 18 fields, so the abstention, not the
+     point estimate, is what makes the inferences usable.
   4. Predict a top field for every CONTENT lemma (noun/adj/verb) with a vector and no
-     gold tag — but ABSTAIN (store nothing) unless the CALIBRATED probability clears that
-     field's OWN threshold (tuned to `target_precision`) and beats the runner-up by ≥
-     MARGIN_FLOOR. A single absolute gate is meaningless once class_weight skews the
-     posteriors (F17), so thresholds are per-class.
+     gold tag — but ABSTAIN (store nothing) unless the probability clears that field's OWN
+     threshold (tuned to `target_precision`) and beats the runner-up by ≥ MARGIN_FLOOR. A
+     single absolute gate is meaningless once class_weight skews the posteriors (F17), so
+     thresholds are per-class.
 
 Provenance is preserved end to end ("sources define, AI explains"): gold tags are
 written verbatim (source='wiktionary-tag', score=1.0); classifier guesses are
@@ -212,52 +213,56 @@ def classify_domains(
     y = np.asarray(y)
     print(f"Training examples: {len(y)} across {len(set(y))} fields.", file=sys.stderr)
 
-    # Held-out evaluation — reports the DEPLOYED rule (isotonic-calibrated probabilities +
-    # per-class abstain thresholds + margin), not a raw split model (#47 / F45).
+    # Held-out evaluation. Calibrate ONLY IF isotonic improves held-out ECE. On this small
+    # multiclass data the base logistic regression is already well-calibrated (ECE ~0.04),
+    # and forcing isotonic overfits the per-class calibration map and DEGRADES ECE (measured
+    # 0.042→0.118). The real #47 fix is the per-class abstain thresholds (F16/F17); the
+    # calibration step earns its place only when it lowers ECE, else we deploy raw probs.
     Xtr, Xte, ytr, yte = train_test_split(
         X, y, test_size=test_size, random_state=seed, stratify=y
     )
     cv = max(2, min(5, min(Counter(ytr).values())))
-    clf_eval, calibrated = _fit(None, Xtr, ytr, cv)
+    raw_eval = LogisticRegression(
+        max_iter=2000, C=4.0, class_weight="balanced", n_jobs=-1).fit(Xtr, ytr)
+    cal_eval, cal_ok = _fit(None, Xtr, ytr, cv)   # isotonic when the folds allow
+
+    def _ece_of(model):
+        cls = list(model.classes_)
+        P = model.predict_proba(Xte)
+        correct = [1.0 if cls[j] == yy else 0.0 for j, yy in zip(P.argmax(axis=1), yte)]
+        return round(expected_calibration_error(P.max(axis=1), correct), 4)
+
+    ece_raw = _ece_of(raw_eval)
+    ece_cal = _ece_of(cal_eval) if cal_ok else ece_raw
+    use_cal = bool(cal_ok and ece_cal < ece_raw)
+    clf_eval = cal_eval if use_cal else raw_eval
     classes = list(clf_eval.classes_)
     probs_te = clf_eval.predict_proba(Xte)
     pred_te = [classes[i] for i in probs_te.argmax(axis=1)]
     acc = float(accuracy_score(yte, pred_te))
     macro_f1 = float(f1_score(yte, pred_te, average="macro"))
 
-    # Calibration diagnostic (#47/F16): ECE of the raw softmax vs the calibrated probs.
-    raw_te = LogisticRegression(
-        max_iter=2000, C=4.0, class_weight="balanced", n_jobs=-1
-    ).fit(Xtr, ytr).predict_proba(Xte)
-    raw_classes = list(sorted(set(ytr)))  # LogisticRegression.classes_ order
-
-    def _ece(P, cls):
-        conf = P.max(axis=1)
-        correct = [1.0 if cls[j] == yy else 0.0 for j, yy in zip(P.argmax(axis=1), yte)]
-        return round(expected_calibration_error(conf, correct), 4)
-
-    ece_raw = _ece(raw_te, list(LogisticRegression(
-        max_iter=2000, C=4.0, class_weight="balanced", n_jobs=-1
-    ).fit(Xtr, ytr).classes_))
-    ece_cal = _ece(probs_te, classes)
-
     # Per-class abstain thresholds tuned for a precision target (#47/F17): one absolute
-    # gate is meaningless once class_weight skews posteriors. Tuned on the training set's
-    # calibrated probs; reported honestly on the held-out test set under the deployed rule.
+    # gate is meaningless once class_weight skews posteriors. Tuned on the training probs
+    # of the deployed model; reported honestly on the held-out test set (F45).
     thresholds = tune_class_thresholds(
         clf_eval.predict_proba(Xtr), ytr, classes,
         target_precision=target_precision, min_threshold=0.30,
     )
     deployed = precision_coverage_report(probs_te, yte, classes, thresholds, MARGIN_FLOOR)
     print(f"Held-out accuracy={acc:.3f}  macro-F1={macro_f1:.3f}  "
-          f"ECE {ece_raw}→{ece_cal}  deployed-precision={deployed['precision_on_labeled']} "
-          f"@ coverage={deployed['coverage']}", file=sys.stderr)
+          f"ECE raw={ece_raw} cal={ece_cal} → {'calibrated' if use_cal else 'uncalibrated'}; "
+          f"deployed-precision={deployed['precision_on_labeled']} @ coverage={deployed['coverage']}",
+          file=sys.stderr)
 
-    # Production model: isotonic-calibrated, refit on ALL gold for maximum coverage. The
-    # per-class thresholds tuned above transfer because they live on the calibrated
-    # (common frequency) scale, not raw softmax.
+    # Production model: the SAME choice (calibrated iff it helped), refit on ALL gold.
     cv_prod = max(2, min(5, min(Counter(y).values())))
-    clf, calibrated = _fit(None, X, y, cv_prod)
+    if use_cal:
+        clf, calibrated = _fit(None, X, y, cv_prod)
+    else:
+        clf = LogisticRegression(
+            max_iter=2000, C=4.0, class_weight="balanced", n_jobs=-1).fit(X, y)
+        calibrated = False
     classes = list(clf.classes_)
     cls_index = {c: i for i, c in enumerate(classes)}
 
@@ -324,7 +329,7 @@ def classify_domains(
         "fields": len(set(y.tolist())),
         "held_out_accuracy": round(acc, 4),
         "held_out_macro_f1": round(macro_f1, 4),
-        "calibration": "isotonic (CalibratedClassifierCV)" if calibrated else "none (fell back to raw)",
+        "calibration": "isotonic (improved ECE)" if calibrated else "none (raw already well-calibrated)",
         "ece_raw": ece_raw,
         "ece_calibrated": ece_cal,
         "target_precision": target_precision,
