@@ -151,20 +151,52 @@ function CorpusToggle({ value, onChange, options }: {
 
 const Loading = () => <p className="py-6 text-center text-sm text-slate-400 dark:text-slate-600">Φόρτωση…</p>;
 const Empty = ({ msg }: { msg: string }) => <p className="py-6 text-center text-sm text-slate-400 dark:text-slate-600">{msg}</p>;
+const ErrorState = () => (
+  <p className="py-6 text-center text-sm text-rose-500 dark:text-rose-400">Δεν ήταν δυνατή η φόρτωση αυτής της ενότητας.</p>
+);
+
+type SectionStatus = "loading" | "ok" | "error";
+
+// Load one section's data while tracking status, so a failed request renders an
+// explicit error rather than silently reading as "empty". The old pattern was
+// `getX().then(setData).catch(() => setData(null))`, which made a 500 or a network
+// failure indistinguishable from a legitimately empty axis — masking exactly the
+// outages this branch is meant to surface (audit F-swallow; DELETION-REVIEW item 1).
+function useSection<T>(load: () => Promise<T>, deps: React.DependencyList) {
+  const [data, setData] = useState<T | null>(null);
+  const [status, setStatus] = useState<SectionStatus>("loading");
+  useEffect(() => {
+    let alive = true;
+    setStatus("loading");
+    setData(null);
+    load()
+      .then((d) => {
+        if (alive) {
+          setData(d);
+          setStatus("ok");
+        }
+      })
+      .catch(() => {
+        if (alive) setStatus("error");
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return { data, status };
+}
 
 // §1 — corpus overview / cumulative view ─────────────────────────────────────
 function OverviewSection() {
-  const [data, setData] = useState<OverviewResponse | null>(null);
-  useEffect(() => {
-    getExploreOverview().then(setData).catch(() => setData(null));
-  }, []);
+  const { data, status } = useSection<OverviewResponse>(() => getExploreOverview(), []);
   return (
     <SectionCard
       id="overview"
       title="Επισκόπηση σωμάτων κειμένων"
       blurb="Το μέγεθος των δύο σωμάτων κειμένων μέσα στον χρόνο — λέξεις ανά έτος και συνολικά. Δείχνει γιατί οι δύο άξονες δεν συγχωνεύονται: διαφορετική εποχή, διαφορετική κλίμακα. Οι κάθετες γραμμές σημειώνουν ιστορικά γεγονότα (πλαίσιο, όχι αιτιότητα)."
     >
-      {!data ? <Loading /> : (
+      {status === "error" ? <ErrorState /> : !data ? <Loading /> : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {data.corpora.map((c) => {
             const m = meta(c.corpus);
@@ -211,11 +243,7 @@ function OverviewSection() {
 
 // §2 — biggest movers (cosine drift) ─────────────────────────────────────────
 function BiggestSection({ corpus, onCorpus, corpora }: SectionProps) {
-  const [data, setData] = useState<DriftInsightsResponse | null>(null);
-  useEffect(() => {
-    setData(null);
-    getDriftInsights(corpus, 20).then(setData).catch(() => setData(null));
-  }, [corpus]);
+  const { data, status } = useSection<DriftInsightsResponse>(() => getDriftInsights(corpus, 20), [corpus]);
   const m = meta(corpus);
   const movers = data?.movers ?? [];
   const max = movers.length ? movers[0].drift_score : 1;
@@ -226,7 +254,7 @@ function BiggestSection({ corpus, onCorpus, corpora }: SectionProps) {
       blurb="Κατάταξη με απόσταση συνημιτόνου των διανυσμάτων (Hamilton κ.ά. 2016), με όριο συχνότητας και στις δύο άκρες ώστε να μη μετράμε τον θόρυβο σπάνιων λέξεων (Dubossarsky κ.ά. 2017)."
       aside={<CorpusToggle value={corpus} onChange={onCorpus} options={corpora} />}
     >
-      {!data ? <Loading /> : movers.length === 0 ? <Empty msg="Καμία διαθέσιμη μετατόπιση." /> : (
+      {status === "error" ? <ErrorState /> : !data ? <Loading /> : movers.length === 0 ? <Empty msg="Καμία διαθέσιμη μετατόπιση." /> : (
         <div className="flex flex-col gap-0.5">
           {movers.map((mv, i) => (
             <BarRow key={mv.lemma_id} rank={i + 1} lemma={mv.lemma} value={mv.drift_score} max={max}
@@ -240,11 +268,7 @@ function BiggestSection({ corpus, onCorpus, corpora }: SectionProps) {
 
 // §3 — interesting movers: two metrics side by side ──────────────────────────
 function InterestingSection({ corpus, onCorpus, corpora }: SectionProps) {
-  const [data, setData] = useState<InterestingResponse | null>(null);
-  useEffect(() => {
-    setData(null);
-    getExploreInteresting(corpus, 15).then(setData).catch(() => setData(null));
-  }, [corpus]);
+  const { data, status } = useSection<InterestingResponse>(() => getExploreInteresting(corpus, 15), [corpus]);
   const m = meta(corpus);
   const nb = data?.neighbor ?? [];
   const fg = data?.freq_gated ?? [];
@@ -257,7 +281,7 @@ function InterestingSection({ corpus, onCorpus, corpora }: SectionProps) {
       blurb="Δύο μέτρα ανθεκτικά στη συχνότητα, δίπλα-δίπλα. Αριστερά: πόσοι σημασιολογικοί γείτονες άλλαξαν (Gonen κ.ά. 2020). Δεξιά: απόσταση συνημιτόνου, αλλά μόνο για λέξεις αρκετά συχνές και στις δύο άκρες."
       aside={<CorpusToggle value={corpus} onChange={onCorpus} options={corpora} />}
     >
-      {!data ? <Loading /> : (
+      {status === "error" ? <ErrorState /> : !data ? <Loading /> : (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <div>
             <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Ανανέωση γειτόνων (Gonen)</h3>
@@ -294,11 +318,7 @@ function InterestingSection({ corpus, onCorpus, corpora }: SectionProps) {
 
 // §4 — movers by field ───────────────────────────────────────────────────────
 function ByFieldSection({ corpus, onCorpus, corpora }: SectionProps) {
-  const [data, setData] = useState<ByFieldResponse | null>(null);
-  useEffect(() => {
-    setData(null);
-    getExploreByField(corpus, 6).then(setData).catch(() => setData(null));
-  }, [corpus]);
+  const { data, status } = useSection<ByFieldResponse>(() => getExploreByField(corpus, 6), [corpus]);
   const m = meta(corpus);
   const fields = data?.fields ?? [];
   return (
@@ -308,7 +328,7 @@ function ByFieldSection({ corpus, onCorpus, corpora }: SectionProps) {
       blurb="Οι λέξεις που μετατοπίστηκαν περισσότερο μέσα σε κάθε θεματικό πεδίο. Το πεδίο προκύπτει από τις ετικέτες χρήσης του Wiktionary· όπου λείπουν, ένας επιβλεπόμενος ταξινομητής το προβλέπει από το διανυσματικό περιβάλλον της λέξης (σημειώνεται με ~)."
       aside={<CorpusToggle value={corpus} onChange={onCorpus} options={corpora} />}
     >
-      {!data ? <Loading /> : fields.length === 0 ? <Empty msg="Δεν υπάρχουν δεδομένα ανά πεδίο." /> : (
+      {status === "error" ? <ErrorState /> : !data ? <Loading /> : fields.length === 0 ? <Empty msg="Δεν υπάρχουν δεδομένα ανά πεδίο." /> : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {fields.map((f) => (
             <div key={f.field} className="rounded-lg border border-slate-100 p-3 dark:border-slate-800">
@@ -327,9 +347,12 @@ function ByFieldSection({ corpus, onCorpus, corpora }: SectionProps) {
                     <span className="flex items-center gap-1">
                       <WordLink lemma={mv.lemma} />
                       {mv.domain_source === "classifier" && (
+                        // The classifier softmax is uncalibrated (audit F17), so a
+                        // precise «εμπιστοσύνη N%» overstates it. Show only the ~
+                        // marker meaning "predicted field", no fabricated percentage.
                         <span
                           className="text-[10px] text-slate-300 dark:text-slate-600"
-                          title={`Πεδίο από πρόβλεψη ταξινομητή${mv.domain_score != null ? ` (εμπιστοσύνη ${Math.round(mv.domain_score * 100)}%)` : ""}`}
+                          title="Θεματικό πεδίο από πρόβλεψη ταξινομητή (μη βαθμονομημένη· όχι από πηγή)"
                         >~</span>
                       )}
                     </span>
@@ -347,11 +370,7 @@ function ByFieldSection({ corpus, onCorpus, corpora }: SectionProps) {
 
 // §5 — risers & fallers (frequency trend) ────────────────────────────────────
 function TrendsSection({ corpus, onCorpus, corpora }: SectionProps) {
-  const [data, setData] = useState<TrendsResponse | null>(null);
-  useEffect(() => {
-    setData(null);
-    getExploreTrends(corpus, 14).then(setData).catch(() => setData(null));
-  }, [corpus]);
+  const { data, status } = useSection<TrendsResponse>(() => getExploreTrends(corpus, 14), [corpus]);
   const rising = data?.rising ?? [];
   const falling = data?.falling ?? [];
   const riseMax = Math.max(1, ...rising.map((r) => Math.abs(r.slope)));
@@ -364,7 +383,7 @@ function TrendsSection({ corpus, onCorpus, corpora }: SectionProps) {
       blurb="Η τάση της συχνότητας (ανά εκατομμύριο λέξεις) σε όλη την περίοδο — η ανθεκτική κλίση Theil–Sen (διάμεσος όλων των ανά ζεύγη κλίσεων, ώστε μία ακραία χρονιά να μην ορίζει την τάση). Δείχνονται μόνο σταθερές τάσεις (R² ≥ 0,25). Αλλαγή στη χρήση, όχι στη σημασία."
       aside={<CorpusToggle value={corpus} onChange={onCorpus} options={corpora} />}
     >
-      {!data ? <Loading /> : (
+      {status === "error" ? <ErrorState /> : !data ? <Loading /> : (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <div>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">↑ Ανερχόμενες</h3>
@@ -402,10 +421,7 @@ function TrendsSection({ corpus, onCorpus, corpora }: SectionProps) {
 
 // §6 — cross-corpus comparison: quadrant + keyness ───────────────────────────
 function CompareSection() {
-  const [data, setData] = useState<CompareResponse | null>(null);
-  useEffect(() => {
-    getExploreCompare().then(setData).catch(() => setData(null));
-  }, []);
+  const { data, status } = useSection<CompareResponse>(() => getExploreCompare(), []);
   const pairs = data?.pairs ?? [];
   const pMeta = meta("parliament"), nMeta = meta("news");
   // Axes are percentile ranks (0..1) within each corpus — raw cosine drift is not
@@ -426,7 +442,7 @@ function CompareSection() {
       title="Σύγκριση σωμάτων κειμένων"
       blurb="Η μόνη ενότητα όπου τα δύο σώματα κειμένων συναντιούνται — ρητά ως σύγκριση. Αριστερά: συμφωνούν για το πόσο μετατοπίστηκε μια λέξη; (θέση κατάταξης μέσα σε κάθε σώμα, όχι απόλυτη τιμή — οι ακατέργαστες αποστάσεις δεν είναι συγκρίσιμες). Δεξιά: ποιες λέξεις χαρακτηρίζουν κάθε σώμα κειμένων (keyness· DP = δείκτης διασποράς Gries, χαμηλό = ομοιόμορφα κατανεμημένη, όχι έξαρση μίας χρονιάς)."
     >
-      {!data ? <Loading /> : (
+      {status === "error" ? <ErrorState /> : !data ? <Loading /> : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* agreement / divergence quadrant */}
           <div>

@@ -1,17 +1,19 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getWord } from "../api/client";
 import type { WordEntry, WordResponse } from "../api/types";
 import { genderEl, gramEl, posEl, etyRelEl, langEl, relEl, classifyTags, usageEl, domainEl, freqBandEl, freqBandLevel } from "../api/labels";
-import { useMediaQuery } from "../hooks/useMediaQuery";
 import InflectionTables from "../components/InflectionTables";
 import EtymologyTimeline from "../components/EtymologyTimeline";
 import DiachronicPanel from "../components/DiachronicPanel";
 import { useIsSaved, toggleSaved, recordRecent } from "../hooks/useUserData";
 
-// Cytoscape is a heavy dependency (~480 kB) and the graph is only one of three
-// panels — code-split it so the initial bundle (search + definitions) stays lean.
-const RelationGraph = lazy(() => import("../components/RelationGraph"));
+// The relation graph was a Cytoscape node-link canvas (438 kB, 55% of the JS bundle).
+// It was the wrong encoding for this data — median degree 2, ~46% of content lemmas
+// with zero edges, 64% of edges the untyped "related" catch-all (audit F33/F34) — so
+// the typed relations are rendered as text lists (EntryFamily / EntryCognates) instead.
+// The GET /api/word/{lemma}/graph endpoint and the relations/etymons tables are KEPT;
+// only the rendering changed. See docs/DELETION-REVIEW.md item 3.
 
 function SourceBadge({ source }: { source: string }) {
   return (
@@ -485,27 +487,32 @@ function EntryCollocations({ entry }: { entry: WordEntry }) {
   );
 }
 
-// Semantic neighbors for one entry: distributional near-synonyms learned by a
-// word-embedding model (words appearing in similar contexts), e.g. καναπές →
-// πολυθρόνα, τρέχω → περπατάω. Distinct from Οικογένεια λέξεων (curated relations)
-// and Τυπικές συνάψεις (co-occurrence): these are emergent *meaning* similarity.
-// All stored neighbors resolve to a lemma, so every chip links. Violet palette.
+// Distributional neighbours for one entry: words that appear in SIMILAR CONTEXTS
+// in the corpus, learned by a word-embedding model (e.g. καναπές → πολυθρόνα).
+// Deliberately NOT labelled «σημασιολογικοί» (semantic) — cosine proximity in a
+// static word2vec space is context similarity, not meaning identity: it pulls in
+// co-hyponyms, antonyms and topical associates alike. The old «ομοιότητα X%»
+// tooltip presented that cosine as a meaning-similarity percentage, which
+// overclaims (audit; DELETION-REVIEW item 5). The raw score is kept off the UI.
 function EntryNeighbors({ entry }: { entry: WordEntry }) {
   if (entry.neighbors.length === 0) return null;
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-1 flex items-center gap-2">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-          Σημασιολογικοί γείτονες
+          Λέξεις σε παρόμοια συμφραζόμενα
         </h3>
         <SourceBadge source={entry.neighbors[0].source} />
       </div>
+      <p className="mb-3 text-xs text-slate-400 dark:text-slate-500">
+        Λέξεις που εμφανίζονται σε παρόμοια περιβάλλοντα στο σώμα κειμένων — γειτνίαση
+        χρήσης, όχι ταυτότητα σημασίας.
+      </p>
       <div className="flex flex-wrap gap-1.5">
         {entry.neighbors.map((n, i) => (
           <Link
             key={i}
             to={`/word/${encodeURIComponent(n.neighbor)}`}
-            title={`ομοιότητα ${(n.score * 100).toFixed(0)}%`}
             className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-0.5 text-sm text-violet-700 transition hover:border-violet-400 hover:bg-violet-100 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:border-violet-400"
           >
             {n.neighbor}
@@ -602,33 +609,26 @@ function SaveButton({ lemma }: { lemma: string }) {
   );
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
+function SectionHeading({ children, id }: { children: React.ReactNode; id?: string }) {
   return (
-    <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{children}</h3>
+    <h3 id={id} className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{children}</h3>
   );
 }
-
-type TabKey = "defs" | "forms" | "rel";
 
 export default function WordPage() {
   const { lemma } = useParams<{ lemma: string }>();
   const [data, setData] = useState<WordResponse | null>(null);
   const [status, setStatus] = useState<"loading" | "ok" | "notfound" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("defs");
   const [formsOpen, setFormsOpen] = useState(false);
   // Bilingual mode (#39) is a single page-level toggle shared by every stacked
   // homograph entry, rather than one button per entry — one switch flips them all.
   const [showEn, setShowEn] = useState(false);
-  // 640px gates mobile tabs vs. desktop; 1024px gates the desktop two-column split.
-  const isDesktop = useMediaQuery("(min-width: 640px)");
-  const isWide = useMediaQuery("(min-width: 1024px)");
 
   useEffect(() => {
     if (!lemma) return;
     let cancelled = false;
     setStatus("loading");
-    setTab("defs");
     setFormsOpen(false);
     setShowEn(false);
     getWord(lemma)
@@ -652,12 +652,13 @@ export default function WordPage() {
   }, [lemma]);
 
   const hasForms = !!data && data.entries.some((e) => e.forms.length > 0);
-
-  const tabs: { key: TabKey; label: string; show: boolean }[] = [
-    { key: "defs", label: "Ορισμοί", show: true },
-    { key: "forms", label: "Κλίση", show: hasForms },
-    { key: "rel", label: "Σχέσεις", show: true },
-  ];
+  // The typed, sourced lexical relations that the graph used to render — now shown
+  // as text lists. Only mount the «Σχέσεις» section when there is something in it.
+  const hasRelations =
+    !!data &&
+    data.entries.some(
+      (e) => e.family.some((g) => g.terms.length > 0) || (e.cognates?.length ?? 0) > 0,
+    );
 
   const multipleEntries = !!data && data.entries.length > 1;
 
@@ -692,23 +693,26 @@ export default function WordPage() {
           <EntryExamples entry={e} />
           <EntryEtymology entry={e} />
           <EtymologyTimeline entry={e} />
-          <EntryCognates entry={e} />
-          <EntryFamily entry={e} />
           <EntryNeighbors entry={e} />
           <EntryCollocations entry={e} />
           <EntryDescendants entry={e} />
         </div>
       ))}
-      {lemma && <DiachronicPanel lemma={lemma} />}
     </div>
   );
 
-  const forms = data && hasForms && (
-    <div className="flex flex-col gap-4">
+  // Σχέσεις — the typed, sourced lexical relations, as text lists (replaces the
+  // Cytoscape graph). Family = curated Wiktionary relations; cognates = shared root.
+  const relations = data && hasRelations && (
+    <section aria-labelledby="rel-heading" className="flex flex-col gap-4">
+      <SectionHeading id="rel-heading">Σχέσεις</SectionHeading>
       {data.entries.map((e) => (
-        <EntryForms key={e.lemma_id} entry={e} showLemma={multipleEntries} />
+        <div key={e.lemma_id} className="flex flex-col gap-4">
+          <EntryFamily entry={e} />
+          <EntryCognates entry={e} />
+        </div>
       ))}
-    </div>
+    </section>
   );
 
   // Collapsible κλίση (progressive disclosure): paradigm tables are long and
@@ -753,12 +757,6 @@ export default function WordPage() {
     </section>
   );
 
-  const relations = data && lemma && (
-    <Suspense fallback={<p className="text-slate-400">Φόρτωση γραφήματος…</p>}>
-      <RelationGraph lemma={lemma} />
-    </Suspense>
-  );
-
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
@@ -778,61 +776,26 @@ export default function WordPage() {
         <p className="text-red-600 dark:text-red-400">Αποτυχία φόρτωσης{error ? `: ${error}` : ""}</p>
       )}
 
-      {status === "ok" && data && !isDesktop && (
-        // Mobile: tabbed — one panel at a time, graph mounts only when selected.
-        <div>
-          <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
-            {tabs
-              .filter((t) => t.show)
-              .map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setTab(t.key)}
-                  className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                    tab === t.key
-                      ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900"
-                      : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-          </div>
-          <div className="mt-4">
-            {tab === "defs" && definitions}
-            {tab === "forms" && forms}
-            {tab === "rel" && relations}
-          </div>
-        </div>
-      )}
-
-      {status === "ok" && data && isDesktop && isWide && (
-        // Wide desktop: two-column — primary content left, sticky graph rail right.
-        <div className="grid grid-cols-[minmax(0,1fr)_380px] items-start gap-6">
-          <div className="flex flex-col gap-4">
-            {definitions}
-            {formsDisclosure}
-          </div>
-          <aside className="sticky top-4 flex flex-col gap-4">
-            <QuickFacts entries={data.entries} />
-            <div>
-              <SectionHeading>Γράφημα σχέσεων</SectionHeading>
+      {/*
+        One layout tree (audit F34). The three viewport-forked trees + useMediaQuery
+        existed only to mount the single Cytoscape canvas exactly once; with the graph
+        gone the fork is unnecessary, so everything is one semantic document that a
+        container query splits into a reading column + a facts rail on wide screens.
+        No JS breakpoints, no fake tab widget — real headings, scroll order preserved.
+      */}
+      {status === "ok" && data && (
+        <div className="@container">
+          <div className="grid grid-cols-1 items-start gap-6 @3xl:grid-cols-[minmax(0,1fr)_290px]">
+            <div className="flex min-w-0 flex-col gap-6">
+              {definitions}
               {relations}
+              {lemma && <DiachronicPanel lemma={lemma} />}
+              {formsDisclosure}
             </div>
-          </aside>
-        </div>
-      )}
-
-      {status === "ok" && data && isDesktop && !isWide && (
-        // Narrow desktop / tablet: single column, collapsible κλίση, graph below.
-        <div className="flex flex-col gap-6">
-          <div>{definitions}</div>
-          {formsDisclosure}
-          <section>
-            <SectionHeading>Σχέσεις</SectionHeading>
-            {relations}
-          </section>
+            <aside className="flex flex-col gap-4 @3xl:sticky @3xl:top-4">
+              <QuickFacts entries={data.entries} />
+            </aside>
+          </div>
         </div>
       )}
     </div>

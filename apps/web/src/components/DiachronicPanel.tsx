@@ -184,53 +184,48 @@ function DriftBadge({ s }: { s: DiachronicSeries }) {
   const pct = Math.min(100, Math.round(d.drift_score * 100));
   // Endpoint-bootstrap 95% CI (#36) — present only after bootstrap_drift ran.
   const hasCi = d.drift_ci_lo != null && d.drift_ci_hi != null;
-  const sig = d.drift_significant; // true | false | null
-  const ciTitle = hasCi
-    ? ` 95% διάστημα εμπιστοσύνης (bootstrap) ${d.drift_ci_lo!.toFixed(3)}–${d.drift_ci_hi!.toFixed(3)}.` +
-      (sig === true
-        ? " Στατιστικά σημαντική: η μετατόπιση ξεπερνά τον θόρυβο εκτίμησης της ίδιας λέξης."
-        : sig === false
-        ? " Μη σημαντική: εντός του θορύβου εκτίμησης σε αυτή τη συχνότητα."
-        : "")
-    : "";
+  // Honesty gates (audit F5/F7/F8/F9; DELETION-REVIEW item 2):
+  //  · the "σημαντική/μη σημαντική" chip is REMOVED — drift_significant divides by a
+  //    replicate SD, not a standard error, so it is not a valid test (F8). It returns
+  //    only once #43's permutation/BCa null exists.
+  //  · the change point shows ONLY with its robust-z score; a change_point_year with a
+  //    NULL score is the ungated argmax that collapses onto a corpus gap (F5/F9).
+  //  · the drift point estimate is NEVER shown bare — a single cosine distance between
+  //    two noisy word2vec models reads as precise when it is ~96% estimator noise (F7).
+  //    It appears with its bootstrap CI, or is explicitly flagged as un-bounded.
+  const showChangePoint = d.change_point_year != null && d.change_point_score != null;
   return (
     <div
       className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400"
-      title={`Σημασιολογική μετατόπιση: απόσταση συνημιτόνου ${d.drift_score.toFixed(3)} μεταξύ ${d.first_year} και ${d.last_year} (${d.n_slices} τομές). Μεγαλύτερη = μεγαλύτερη αλλαγή στα συμφραζόμενα.${ciTitle}`}
+      title={`Σημασιολογική μετατόπιση: απόσταση συνημιτόνου ${d.drift_score.toFixed(3)} μεταξύ ${d.first_year} και ${d.last_year} (${d.n_slices} τομές). Μεγαλύτερη = μεγαλύτερη αλλαγή στα συμφραζόμενα.${hasCi ? ` 95% διάστημα εμπιστοσύνης (bootstrap) ${d.drift_ci_lo!.toFixed(3)}–${d.drift_ci_hi!.toFixed(3)}.` : ""}`}
     >
       <span className={`rounded px-1.5 py-0.5 font-medium ${m.chip}`}>{m.label}</span>
-      <span>μετατόπιση {d.drift_score.toFixed(2)}</span>
-      <span className="h-1.5 w-20 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-        <span className="block h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: m.stroke }} />
-      </span>
-      {hasCi && (
-        <span className="text-slate-400 dark:text-slate-500">
-          ±95% [{d.drift_ci_lo!.toFixed(2)}–{d.drift_ci_hi!.toFixed(2)}]
-        </span>
-      )}
-      {sig === true && (
+      {hasCi ? (
+        <>
+          <span>μετατόπιση {d.drift_score.toFixed(2)}</span>
+          <span className="h-1.5 w-20 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+            <span className="block h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: m.stroke }} />
+          </span>
+          <span className="text-slate-400 dark:text-slate-500">
+            ±95% [{d.drift_ci_lo!.toFixed(2)}–{d.drift_ci_hi!.toFixed(2)}]
+          </span>
+        </>
+      ) : (
         <span
-          className="rounded px-1.5 py-0.5 font-medium text-emerald-700 bg-emerald-100 dark:bg-emerald-500/15 dark:text-emerald-300"
-          title="Η μετατόπιση ξεπερνά τον θόρυβο εκτίμησης της ίδιας λέξης (bootstrap)."
+          className="text-slate-400 dark:text-slate-500"
+          title="Η σημειακή εκτίμηση εμφανίζεται μόνο μαζί με διάστημα αβεβαιότητας (bootstrap). Εκκρεμεί ο επαναϋπολογισμός."
         >
-          σημαντική
-        </span>
-      )}
-      {sig === false && (
-        <span
-          className="rounded px-1.5 py-0.5 font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 dark:text-slate-400"
-          title="Εντός του θορύβου εκτίμησης σε αυτή τη συχνότητα — δεν ξεχωρίζει από τον θόρυβο (bootstrap)."
-        >
-          μη σημαντική
+          μετατόπιση: εκτίμηση χωρίς διάστημα αβεβαιότητας
         </span>
       )}
       <span className="text-slate-400 dark:text-slate-500">{d.first_year}→{d.last_year}</span>
-      {d.change_point_year != null ? (
-        <span className="text-slate-400 dark:text-slate-500" title={
-          d.change_point_score != null
-            ? `Εμπιστοσύνη z=${d.change_point_score.toFixed(1)} (το βήμα ξεχωρίζει από τα υπόλοιπα)`
-            : undefined
-        }>· καμπή ~{d.change_point_year}</span>
+      {showChangePoint ? (
+        <span
+          className="text-slate-400 dark:text-slate-500"
+          title={`Εμπιστοσύνη z=${d.change_point_score!.toFixed(1)} (το βήμα ξεχωρίζει από τα υπόλοιπα)`}
+        >
+          · καμπή ~{d.change_point_year}
+        </span>
       ) : (
         <span className="text-slate-400 dark:text-slate-500" title="Κανένα έτος δεν ξεχωρίζει στατιστικά ως σημείο καμπής (#44)">· χωρίς σαφές σημείο καμπής</span>
       )}

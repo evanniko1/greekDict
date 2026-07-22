@@ -49,20 +49,3 @@ export function useTheme(): { theme: Theme; toggle: () => void } {
 
   return { theme, toggle };
 }
-
-// Read-only subscription to the active theme via the `.dark` class on <html>.
-// For consumers (e.g. the cytoscape graph) that need to react to theme changes
-// but must NOT own theme state — avoids a second useTheme instance desyncing
-// from the header toggle. Works no matter who flips the class.
-export function useIsDark(): boolean {
-  const [isDark, setIsDark] = useState<boolean>(() =>
-    document.documentElement.classList.contains("dark"),
-  );
-  useEffect(() => {
-    const el = document.documentElement;
-    const obs = new MutationObserver(() => setIsDark(el.classList.contains("dark")));
-    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-  return isDark;
-}
