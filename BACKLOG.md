@@ -339,9 +339,32 @@ Not bugs to fix silently; these are scope and philosophy calls.
 - [?] **D2 — Scope discipline.** 14 word-page surfaces and 20 pipelines against 2 measured
   quality numbers (F54). Which surfaces earn their keep?
   <sub>Audit §5 "What to CUT" has a concrete proposal.</sub>
-- [?] **D3 — Diachronic claims.** If the drift signal is ~96% estimator noise (F7, F12),
-  the honest options are: fix the estimator (#43/#48/#50), demote the feature to
-  exploratory-with-warnings, or remove it.
+- [?] **D3 — Diachronic claims. EVIDENCE IN (2026-07-22); recommendation FIX+KEEP,
+  awaiting maintainer confirmation.** The `~96% noise` framing (F7/F12) came from the
+  *shipped* DB's artifacts. The offline no-change-control harness
+  (`pipelines/analysis/drift_signal_test.py`, Dubossarsky 2017) re-measured it cleanly on
+  the materialized slices, at decision-grade sample sizes:
+    - **Signal is real, and scales with gap width + corpus size.** News noise floor
+      (two disjoint halves of one year, zero elapsed time): median 0.0795, p95 0.169.
+      Real drift 2011→2024 (13 y): median 0.158, **SNR 1.98, 43.8% of words clear the
+      noise p95**; 2016→2024 (8 y): SNR 1.29, 13.2%. Parliament (30k samples): 1990→2019
+      SNR 1.73 / 25.1%; 2000→2019 SNR 1.60 / 20.9%.
+    - **But the per-word noise floor is high** (median 0.08 news / 0.11 parliament), so a
+      raw per-word drift number is mostly noise for the *typical* word — only the top
+      ~20–44% (widest gaps, larger corpus) are individually trustworthy.
+    - **F44/F50 nondeterminism is real but small**: `workers=1` gives exactly 0.0 drift;
+      `workers=16` (the production setting) manufactures mean 0.0024 (news) / 0.005
+      (parliament) even with a fixed seed — ~2–3% of the signal. Fix = `workers=1`+seed.
+  **Recommendation:** FIX + KEEP, not demote/remove. The 8–10 h Tier B rebuild is worth
+  it *after* the methodology waves land, repopulated with (a) a **per-word noise-floor
+  gate** — surface drift only when it clears the corpus empirical p95 (news ≥0.17,
+  parliament ≥0.25; this is the #51 deliverable, now with a measured threshold),
+  (b) `workers=1`+seed, (c) rank/aggregate framing over precise per-word values, (d) a
+  preference for wide endpoints + full 1M-line news years. The Phase 1′ honesty gates
+  (drift shown only with its CI; ungated change-point suppressed) are *vindicated* by
+  this — they are exactly the containment a signal this noisy needs. Full reports:
+  `data/analysis/drift_signal_{news,parliament}.json` (gitignored; regenerate with the
+  harness).
 - [?] **D4 — "Η ΤΝ εξηγεί· οι πηγές ορίζουν".** The repo contains no LLM; the "AI" is
   word2vec + logistic regression (F31, audit §3.9). Either build the grounded-explanation
   layer the principle promises, or change the user-facing copy.
